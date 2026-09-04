@@ -1,6 +1,7 @@
 const EIA_BASE = "https://api.eia.gov/v2";
 const CPC = "https://ftp.cpc.ncep.noaa.gov/htdocs/degree_days/weighted/daily_data";
 const GFS_DODS = "https://nomads.ncep.noaa.gov/dods/gfs_0p5";
+const WEATHER_VERSION = "gfs-v2";
 
 async function getText(url){
   const r=await fetch(url,{headers:{"User-Agent":"natgas-power-demand-bot"}});
@@ -64,11 +65,13 @@ function weatherBlock(w){
   return ["","🌡️ WEATHER → POWER",`Data: ${cur.date}`,"","ACTUAL DEGREE DAYS (°F-days)","       Current   Prior    3D Avg   7D Avg",row("HDD",cur.hdd,prior?.hdd,h3,h7),row("CDD",cur.cdd,prior?.cdd,c3,c7),row("TDD",curT,priorT,t3,t7),"","FORECAST DEGREE DAYS — GFS (°F-days)","       Next 1D  Next 3D  Next 7D",fr("HDD",fh1,fh3,fh7),fr("CDD",fc1,fc3,fc7),fr("TDD",fh1+fc1,fh3+fc3,fh7+fc7),f.length?`Through: ${f.at(-1).date}`:"Through: N/A","Source: NOAA/NCEP GFS 0.50° 2m TMP; 6h samples"].join("\n");
 }
 async function maybeWeather(state){
-  state.weather??={actual:[],forecast:[]};const last=Date.parse(state.weather.updatedAt||"");
-  if(Number.isFinite(last)&&Date.now()-last<12*3600000){process.env.__NATGAS_WEATHER_BLOCK=state.weather.telegramBlock||"";return}
+  state.weather??={actual:[],forecast:[]};
+  const last=Date.parse(state.weather.updatedAt||"");
+  const currentVersion=state.weather.version||"";
+  if(currentVersion===WEATHER_VERSION&&Number.isFinite(last)&&Date.now()-last<12*3600000){process.env.__NATGAS_WEATHER_BLOCK=state.weather.telegramBlock||"";return}
   try{state.weather.actual=await weatherActual()}catch(e){state.weather.error=String(e.message)}
   try{state.weather.forecast=await gfsForecast()}catch(e){state.weather.forecastError=String(e.message);state.weather.forecast=[]}
-  state.weather.updatedAt=new Date().toISOString();state.weather.telegramBlock=weatherBlock(state.weather);process.env.__NATGAS_WEATHER_BLOCK=state.weather.telegramBlock||"";
+  state.weather.version=WEATHER_VERSION;state.weather.updatedAt=new Date().toISOString();state.weather.telegramBlock=weatherBlock(state.weather);process.env.__NATGAS_WEATHER_BLOCK=state.weather.telegramBlock||"";
 }
 export async function fetchEIA(path,params={},state){
   const key=process.env.EIA_API_KEY;if(!key)throw Error("Missing EIA_API_KEY environment variable");await maybeWeather(state);
