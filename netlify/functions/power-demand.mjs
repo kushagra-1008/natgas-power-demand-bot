@@ -29,17 +29,21 @@ function hourET(now = new Date()) {
 }
 
 function formatET(iso) {
+  const ms = parseAt(iso);
+  if (!Number.isFinite(ms)) return "N/A";
   return new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York", weekday: "short", month: "short", day: "2-digit",
     hour: "2-digit", minute: "2-digit", hour12: true, timeZoneName: "short"
-  }).format(new Date(iso));
+  }).format(new Date(ms));
 }
 
 function formatIndia(iso) {
+  const ms = parseAt(iso);
+  if (!Number.isFinite(ms)) return "N/A";
   return new Intl.DateTimeFormat("en-IN", {
     timeZone: "Asia/Kolkata", weekday: "short", month: "short", day: "2-digit",
     hour: "2-digit", minute: "2-digit", hour12: true, timeZoneName: "short"
-  }).format(new Date(iso));
+  }).format(new Date(ms));
 }
 
 function due(now = new Date()) {
@@ -56,7 +60,8 @@ function due(now = new Date()) {
 }
 
 function parseAt(x) {
-  const s = String(x);
+  const s = String(x ?? "").trim();
+  if (!s) return NaN;
   if (s.endsWith("Z")) return Date.parse(s);
   if (/^\d{4}-\d{2}-\d{2}T\d{2}$/.test(s)) return Date.parse(`${s}:00:00Z`);
   return Date.parse(s);
@@ -94,26 +99,34 @@ function rowsFor(s, signal) {
 }
 
 function nearestAt(s, signal, targetMs, toleranceMs = 90 * 60 * 1000) {
+  if (!Number.isFinite(targetMs)) return null;
   const rows = rowsFor(s, signal);
   let best = null, bestDist = Infinity;
   for (const row of rows) {
-    const dist = Math.abs(parseAt(row.at) - targetMs);
+    const rowMs = parseAt(row.at);
+    if (!Number.isFinite(rowMs)) continue;
+    const dist = Math.abs(rowMs - targetMs);
     if (dist <= toleranceMs && dist < bestDist) { best = row; bestDist = dist; }
   }
   return best;
 }
 
 function sameHourKey(iso) {
+  const ms = parseAt(iso);
+  if (!Number.isFinite(ms)) return null;
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false
-  }).formatToParts(new Date(iso));
+  }).formatToParts(new Date(ms));
   const get = type => parts.find(p => p.type === type)?.value;
-  return `${get("hour")}`;
+  const hour = get("hour");
+  return hour ? String(hour).padStart(2, "0") : null;
 }
 
 function sameHourAverage(s, signal, anchorAt, days) {
   const anchorMs = parseAt(anchorAt);
+  if (!Number.isFinite(anchorMs)) return null;
   const anchorHour = sameHourKey(anchorAt);
+  if (!anchorHour) return null;
   const values = [];
   for (let d = 1; d <= days; d++) {
     const targetMs = anchorMs - d * 24 * 3600000;
@@ -128,7 +141,9 @@ function pct(a, b) {
 }
 
 function comparison(s, signal, anchorAt, value) {
-  const one = nearestAt(s, signal, parseAt(anchorAt) - 24 * 3600000);
+  const anchorMs = parseAt(anchorAt);
+  if (!Number.isFinite(anchorMs)) return { value, v24: null, p24: null, avg3: null, p3: null, avg7: null, p7: null };
+  const one = nearestAt(s, signal, anchorMs - 24 * 3600000);
   const avg3 = sameHourAverage(s, signal, anchorAt, 3);
   const avg7 = sameHourAverage(s, signal, anchorAt, 7);
   return {
@@ -145,13 +160,14 @@ function comparison(s, signal, anchorAt, value) {
 function commonAnchor(s) {
   const sets = CORE_SIGNALS.map(signal => new Set(rowsFor(s, signal).map(o => o.at)));
   if (sets.some(set => set.size === 0)) return null;
-  let common = [...sets[0]].filter(at => sets.every(set => set.has(at)));
+  let common = [...sets[0]].filter(at => sets.every(set => set.has(at)) && Number.isFinite(parseAt(at)));
   common.sort((a, b) => parseAt(a) - parseAt(b));
   return common.at(-1) || null;
 }
 
 function valueAt(s, signal, anchorAt) {
-  return nearestAt(s, signal, parseAt(anchorAt), 90 * 60 * 1000);
+  const ms = parseAt(anchorAt);
+  return Number.isFinite(ms) ? nearestAt(s, signal, ms, 90 * 60 * 1000) : null;
 }
 
 function arrow(p) {
@@ -185,10 +201,11 @@ function report(s, anchorAt) {
   const gasShare = gas != null && totalGen ? gas / totalGen * 100 : null;
   const renewableShare = wind != null && solar != null && totalGen ? (wind + solar) / totalGen * 100 : null;
 
+  const anchorMs = parseAt(anchorAt);
   const residual24 = (() => {
-    const l = nearestAt(s, "total_load", parseAt(anchorAt) - 24 * 3600000);
-    const w = nearestAt(s, "wind_generation", parseAt(anchorAt) - 24 * 3600000);
-    const so = nearestAt(s, "solar_generation", parseAt(anchorAt) - 24 * 3600000);
+    const l = nearestAt(s, "total_load", anchorMs - 24 * 3600000);
+    const w = nearestAt(s, "wind_generation", anchorMs - 24 * 3600000);
+    const so = nearestAt(s, "solar_generation", anchorMs - 24 * 3600000);
     return l && w && so ? l.value - w.value - so.value : null;
   })();
   const residual3 = (() => {
