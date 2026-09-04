@@ -50,29 +50,21 @@ class Storage:
 
     def latest(self, signal: str):
         with self._connect() as con:
-            return con.execute(
-                "SELECT * FROM observations WHERE signal=? ORDER BY observed_at DESC LIMIT 1", (signal,)
-            ).fetchone()
+            return con.execute("SELECT * FROM observations WHERE signal=? ORDER BY observed_at DESC LIMIT 1", (signal,)).fetchone()
 
-    def closest_before(self, signal: str, observed_at: str, hours: float):
+    def historical(self, signal: str, observed_at: str, hours: float, tolerance_hours: float = 1.5):
+        target = datetime.fromisoformat(observed_at.replace("Z", "+00:00")).timestamp() - hours * 3600
+        lo, hi = target - tolerance_hours * 3600, target + tolerance_hours * 3600
         with self._connect() as con:
-            return con.execute(
-                """SELECT * FROM observations WHERE signal=? AND observed_at <= datetime(?, ?) 
-                   ORDER BY observed_at DESC LIMIT 1""",
-                (signal, observed_at, f"+{hours} hours"),
-            ).fetchone()
-
-    def around(self, signal: str, observed_at: str, target_hours: float, tolerance_hours: float = 2.0):
-        # SQLite's datetime modifiers make this comparison portable enough for our ISO UTC timestamps.
-        with self._connect() as con:
-            return con.execute(
-                """SELECT * FROM observations
-                   WHERE signal=?
-                     AND observed_at BETWEEN datetime(?, ?) AND datetime(?, ?)
-                   ORDER BY ABS((julianday(observed_at)-julianday(?)) * 24.0) LIMIT 1""",
-                (signal, observed_at, f"-{target_hours + tolerance_hours} hours", observed_at,
-                 f"-{max(0, target_hours - tolerance_hours)} hours", observed_at),
-            ).fetchone()
+            rows = con.execute("SELECT * FROM observations WHERE signal=?", (signal,)).fetchall()
+        best = None
+        best_distance = None
+        for row in rows:
+            ts = datetime.fromisoformat(row["observed_at"].replace("Z", "+00:00")).timestamp()
+            distance = abs(ts - target)
+            if lo <= ts <= hi and (best_distance is None or distance < best_distance):
+                best, best_distance = row, distance
+        return best
 
     def usage(self) -> int:
         month = datetime.now(timezone.utc).strftime("%Y-%m")
@@ -88,13 +80,10 @@ class Storage:
     def cache_catalog(self, payload: Any):
         with self._connect() as con:
             con.execute(
-                "INSERT INTO catalog_cache(id, fetched_at, payload) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET fetched_at=excluded.fetched_at, payload=excluded.payload",
+                "INSERT INTO catalog_cache(id, fetched_at, payload) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET fetched_at=excluded.fetched_at, payload=excluded.payload",
                 (datetime.now(timezone.utc).isoformat(), json.dumps(payload)),
             )
 
     def get_catalog_cache(self):
         with self._connect() as con:
-            row = con.execute("SELECT fetched_at, payload FROM catalog_cache WHERE id=1").fetchone()
-            if not row:
-                return None
-            return row
+            return con.execute("SELECT fetched_at, payload FROM catalog_cache WHERE id=1").fetchone()
