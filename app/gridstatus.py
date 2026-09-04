@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -43,11 +43,14 @@ class GridStatus:
     def metadata(self, dataset_id: str):
         return self._request(f"/datasets/{dataset_id}")
 
-    def latest(self, dataset_id: str, limit: int = 100):
-        return self._request(f"/datasets/{dataset_id}/query", {"time": "latest", "limit": limit})
-
-    def query(self, dataset_id: str, start: str, end: str, limit: int = 100):
+    def latest(self, dataset_id: str, hours: int = 3, limit: int = 100):
+        # Grid Status documents start_time/end_time/limit for dataset queries.
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(hours=hours)
         return self._request(
             f"/datasets/{dataset_id}/query",
-            {"start_time": start, "end_time": end, "limit": limit},
+            {"start_time": start.isoformat(), "end_time": end.isoformat(), "limit": limit},
         )
+
+    def close(self):
+        self.client.close()
