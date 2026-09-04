@@ -55,9 +55,8 @@ function avgPrev(a,i,key,n){
   const v=a.slice(Math.max(0,i-n),i).map(x=>Number(x[key])).filter(Number.isFinite);
   return v.length?v.reduce((s,x)=>s+x,0)/v.length:null;
 }
-function pct(a,b){return b!=null&&b!==0?(a/b-1)*100:null}
 function fmtDD(v){return v==null?"N/A":v.toFixed(1)}
-function fmtPct(v){return v==null?"N/A":`${v>=0?"+":""}${v.toFixed(1)}%`}
+function signedDD(v){return v==null?"N/A":`${v>=0?"+":""}${v.toFixed(1)}`}
 
 function weatherBlock(w){
   const a=w?.actual||[];
@@ -71,21 +70,21 @@ function weatherBlock(w){
   const fc1=sum(next1,"cdd"),fh1=sum(next1,"hdd"),ft1=fc1!=null&&fh1!=null?fc1+fh1:null;
   const fc3=sum(next3,"cdd"),fh3=sum(next3,"hdd"),ft3=fc3!=null&&fh3!=null?fc3+fh3:null;
   const fc7=sum(next7,"cdd"),fh7=sum(next7,"hdd"),ft7=fc7!=null&&fh7!=null?fc7+fh7:null;
-  const row=(name,c,p,a3,a7)=>`${name.padEnd(5)} ${fmtDD(c).padStart(6)} ${fmtDD(p).padStart(6)} ${fmtDD(a3).padStart(7)} ${fmtDD(a7).padStart(7)}  ${fmtPct(pct(c,p)).padStart(7)} ${fmtPct(pct(c,a3)).padStart(7)} ${fmtPct(pct(c,a7)).padStart(7)}`;
-  const forecastRow=(name,d1,d3,d7)=>`${name.padEnd(5)} ${fmtDD(d1).padStart(6)} ${fmtDD(d3).padStart(6)} ${fmtDD(d7).padStart(6)}`;
+  const row=(name,c,p,a3,a7)=>`${name.padEnd(5)} ${fmtDD(c).padStart(7)} ${fmtDD(p).padStart(7)} ${fmtDD(a3).padStart(7)} ${fmtDD(a7).padStart(7)} ${signedDD(c!=null&&p!=null?c-p:null).padStart(7)} ${signedDD(c!=null&&a3!=null?c-a3:null).padStart(7)} ${signedDD(c!=null&&a7!=null?c-a7:null).padStart(7)}`;
+  const forecastRow=(name,d1,d3,d7)=>`${name.padEnd(5)} ${fmtDD(d1).padStart(7)} ${fmtDD(d3).padStart(7)} ${fmtDD(d7).padStart(7)}`;
   return [
     "",
     "🌡️ WEATHER → POWER",
     `Data: ${cur.date}`,
     "",
     "ACTUAL DEGREE DAYS (°F-days)",
-    "       Current  Prior  3D Avg  7D Avg   Δ24h     Δ3D     Δ7D",
+    "       Current   Prior   3D Avg   7D Avg    Δ24h    Δ3D    Δ7D",
     row("HDD",cur.hdd,prior?.hdd,h3,h7),
     row("CDD",cur.cdd,prior?.cdd,c3,c7),
     row("TDD",curT,priorT,t3,t7),
     "",
-    "FORECAST DEGREE DAYS",
-    "       Next 1D Next 3D Next 7D",
+    "FORECAST DEGREE DAYS (°F-days)",
+    "       Next 1D  Next 3D  Next 7D",
     forecastRow("HDD",fh1,fh3,fh7),
     forecastRow("CDD",fc1,fc3,fc7),
     forecastRow("TDD",ft1,ft3,ft7),
