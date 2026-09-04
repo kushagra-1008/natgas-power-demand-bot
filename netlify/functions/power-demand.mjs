@@ -72,9 +72,11 @@ export default async () => {
     add(s, "load_forecast", latest(r, x => x.type === "DF"));
   }
   if (d.has("gas_generation") || d.has("wind_generation") || d.has("solar_generation")) {
-    // Query all US48 fuel types in one call, then select NG/WND/SUN locally.
-    // This avoids multi-value fueltype facet edge cases while keeping the call budget low.
-    const p = await fetchEIA("/electricity/rto/fuel-type-data/data/", { ...common, "facets[respondent][]": "US48" }, s), r = dataRows(p);
+    // EIA generation is published with a lag, unlike demand. Pull a 72-hour window.
+    // One call still covers NG/WND/SUN and stays well within the monthly budget.
+    const fuelStart = new Date(now.getTime() - 72 * 3600000);
+    const fuelCommon = { ...common, start: fuelStart.toISOString().slice(0, 13) };
+    const p = await fetchEIA("/electricity/rto/fuel-type-data/data/", { ...fuelCommon, "facets[respondent][]": "US48" }, s), r = dataRows(p);
     add(s, "gas_generation", latest(r, x => x.fueltype === "NG"));
     add(s, "wind_generation", latest(r, x => x.fueltype === "WND"));
     add(s, "solar_generation", latest(r, x => x.fueltype === "SUN"));
