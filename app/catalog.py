@@ -14,14 +14,7 @@ class SignalDataset:
     time_column: str
 
 
-SIGNAL_TERMS = {
-    "gas_generation": ("gas", "natural gas", "generation", "fuel mix"),
-    "total_load": ("load", "demand"),
-    "wind_generation": ("wind", "generation", "fuel mix"),
-    "solar_generation": ("solar", "generation", "fuel mix"),
-    "generation_outages": ("outage", "generation"),
-    "load_forecast": ("load", "forecast"),
-}
+SIGNALS = ("gas_generation", "total_load", "wind_generation", "solar_generation", "generation_outages", "load_forecast")
 
 
 def _text(obj: Any) -> str:
@@ -38,12 +31,6 @@ def _items(catalog: dict[str, Any] | list[Any]) -> list[dict[str, Any]]:
 
 
 def is_us_aggregate(metadata: dict[str, Any]) -> bool:
-    """Conservative validation: reject explicit ISO/market-level datasets.
-
-    A dataset is considered eligible only when metadata contains an explicit
-    national/U.S. indication and does not identify an ISO market. We never
-    infer national aggregation by summing ISO datasets.
-    """
     text = _text(metadata)
     iso_terms = ("ercot", "caiso", "pjm", "miso", "spp", "nyiso", "isone", "ieso", "iso ne", "iso new england")
     if any(term in text for term in iso_terms):
@@ -52,44 +39,72 @@ def is_us_aggregate(metadata: dict[str, Any]) -> bool:
     return any(term in text for term in national_terms)
 
 
-def discover(catalog: dict[str, Any] | list[Any], metadata_getter) -> dict[str, SignalDataset | None]:
-    result: dict[str, SignalDataset | None] = {s: None for s in SIGNAL_TERMS}
-    candidates = _items(catalog)
-    for item in candidates:
-        dataset_id = item.get("id") or item.get("dataset_id")
-        if not dataset_id:
-            continue
-        blob = _text(item)
-        possible = [s for s, terms in SIGNAL_TERMS.items() if all(t in blob for t in terms)]
-        if not possible:
-            continue
-        metadata = metadata_getter(dataset_id)
-        if not is_us_aggregate(metadata):
-            continue
-        columns = metadata.get("all_columns") or metadata.get("columns") or []
-        names = [c.get("name") if isinstance(c, dict) else str(c) for c in columns]
-        time_col = metadata.get("time_index_column") or next((n for n in names if "time" in n and "utc" in n), None)
-        for signal in possible:
-            value_col = _choose_value_column(signal, names)
-            if value_col and time_col and result[signal] is None:
-                result[signal] = SignalDataset(signal, dataset_id, metadata, value_col, time_col)
-    return result
-
-
 def _choose_value_column(signal: str, columns: list[str]) -> str | None:
     lowered = [(c, c.lower()) for c in columns]
-    preferred = {
-        "gas_generation": ("natural_gas", "natural gas", "gas", "generation"),
-        "total_load": ("load", "demand"),
-        "wind_generation": ("wind",),
-        "solar_generation": ("solar",),
-        "generation_outages": ("outage", "mw"),
-        "load_forecast": ("forecast", "load", "mw"),
+    exact = {
+        "gas_generation": ("natural_gas", "natural gas", "gas generation", "gas"),
+        "total_load": ("total load", "load"),
+        "wind_generation": ("wind generation", "wind"),
+        "solar_generation": ("solar generation", "solar"),
+        "generation_outages": ("outage", "outages"),
+        "load_forecast": ("load forecast", "forecast"),
     }[signal]
     for col, low in lowered:
-        if all(term in low for term in preferred):
-            return col
-    for col, low in lowered:
-        if any(term in low for term in preferred) and "time" not in low and "location" not in low:
+        if any(term in low for term in exact) and "time" not in low and "location" not in low:
             return col
     return None
+
+
+def _make(signal: str, item: dict[str, Any], metadata: dict[str, Any]) -> SignalDataset | None:
+    columns = metadata.get("all_columns") or metadata.get("columns") or []
+    names = [c.get("name") if isinstance(c, dict) else str(c) for c in columns]
+    time_col = metadata.get("time_index_column") or next((n for n in names if "time" in n.lower() and "utc" in n.lower()), None)
+    value_col = _choose_value_column(signal, names)
+    if not time_col or not value_col:
+        return None
+    return SignalDataset(signal, str(item.get("id") or item.get("dataset_id")), metadata, value_col, time_col)
+
+
+def discover(catalog: dict[str, Any] | list[Any], metadata_getter, overrides: dict[str, str | None] | None = None) -> dict[str, SignalDataset | None]:
+    """Discover only genuine U.S.-aggregate datasets; never sum ISOs."""
+    result: dict[str, SignalDataset | None] = {s: None for s in SIGNALS}
+    items = _items(catalog)
+    by_id = {str(x.get("id") or x.get("dataset_id")): x for x in items if x.get("id") or x.get("dataset_id")}
+
+    # Explicit IDs are still validated against metadata and aggregation scope.
+    for signal, dataset_id in (overrides or {}).items():
+        if not dataset_id:
+            continue
+        item = by_id.get(dataset_id, {"id": dataset_id})
+        metadata = metadata_getter(dataset_id)
+        if is_us_aggregate(metadata):
+            result[signal] = _make(signal, item, metadata)
+
+    # Automatic discovery only examines catalog entries whose catalog metadata
+    # itself explicitly indicates U.S./national scope, minimizing API calls.
+    for item in items:
+        dataset_id = str(item.get("id") or item.get("dataset_id") or "")
+        if not dataset_id or any(x and x.dataset_id == dataset_id for x in result.values()):
+            continue
+        if not is_us_aggregate(item):
+            continue
+        blob = _text(item)
+        for signal in SIGNALS:
+            if result[signal] is not None:
+                continue
+            if signal == "gas_generation" and not ("gas" in blob and "generation" in blob):
+                continue
+            if signal == "total_load" and not ("load" in blob or "demand" in blob):
+                continue
+            if signal == "wind_generation" and not ("wind" in blob and "generation" in blob):
+                continue
+            if signal == "solar_generation" and not ("solar" in blob and "generation" in blob):
+                continue
+            if signal == "generation_outages" and not ("outage" in blob and "generation" in blob):
+                continue
+            if signal == "load_forecast" and not ("load" in blob and "forecast" in blob):
+                continue
+            metadata = metadata_getter(dataset_id)
+            if is_us_aggregate(metadata):
+                result[signal] = _make(signal, item, metadata)
+    return result
