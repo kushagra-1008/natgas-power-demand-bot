@@ -1,8 +1,5 @@
 [build]
-  publish = "."
+  publish = "public"
 
 [functions]
   directory = "netlify/functions"
-
-# The scheduled function itself declares @hourly. Keep this file free of a
-# second schedule so there is only one scheduler trigger.
