@@ -1,8 +1,6 @@
-import { getGridData, getLatitudes, getLongitudes, parseGrib2 } from "@azohra/meteo.grib";
-
 const EIA_BASE = "https://api.eia.gov/v2";
 const CPC = "https://ftp.cpc.ncep.noaa.gov/htdocs/degree_days/weighted/daily_data";
-const NOMADS = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p50.pl";
+const GFS_DODS = "https://nomads.ncep.noaa.gov/dods/gfs_0p5";
 
 async function getText(url){
   const r=await fetch(url,{headers:{"User-Agent":"natgas-power-demand-bot"}});
@@ -21,38 +19,37 @@ async function weatherActual(){
   const c=parseCpc(ct),h=new Map(parseCpc(ht).map(x=>[x.date,x.value]));
   return c.map(x=>({date:x.date,cdd:x.value,hdd:h.get(x.date)})).filter(x=>x.hdd!=null).slice(-30);
 }
-
 function latestCycle(now=new Date()){
-  const t=now.getTime()-3*3600000;
-  const d=new Date(t), hour=d.getUTCHours();
-  const cycleHour=Math.floor(hour/6)*6;
-  return new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate(),cycleHour));
+  const d=new Date(now.getTime()-3*3600000),hour=d.getUTCHours();
+  return {date:`${d.getUTCFullYear()}${String(d.getUTCMonth()+1).padStart(2,"0")}${String(d.getUTCDate()).padStart(2,"0")}`,hour:String(Math.floor(hour/6)*6).padStart(2,"0")};
 }
-function localDate(ms){return new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(ms));}
-function gfsUrl(cycle,fhr){
-  const y=cycle.getUTCFullYear(),m=String(cycle.getUTCMonth()+1).padStart(2,"0"),d=String(cycle.getUTCDate()).padStart(2,"0"),hh=String(cycle.getUTCHours()).padStart(2,"0"),ff=String(fhr).padStart(3,"0");
-  const u=new URL(NOMADS);u.searchParams.set("file",`gfs.t${hh}z.pgrb2.0p50.f${ff}`);u.searchParams.set("var_TMP","on");u.searchParams.set("lev_2_m_above_ground","on");u.searchParams.set("subregion","");u.searchParams.set("leftlon","-130");u.searchParams.set("rightlon","-60");u.searchParams.set("toplat","55");u.searchParams.set("bottomlat","20");u.searchParams.set("dir",`/gfs.${y}${m}${d}/${hh}/atmos`);return u;
+function parseGfsAscii(text){
+  const lines=text.split(/\r?\n/),timeLine=lines.findIndex(x=>/^time,/.test(x)),latLine=lines.findIndex(x=>/^lat,/.test(x)),lonLine=lines.findIndex(x=>/^lon,/.test(x));
+  if(timeLine<0||latLine<0||lonLine<0)throw Error("GFS metadata missing");
+  const times=lines[timeLine+1].split(",").map(Number).filter(Number.isFinite),lats=lines[latLine+1].split(",").map(Number).filter(Number.isFinite),lons=lines[lonLine+1].split(",").map(Number).filter(Number.isFinite);
+  const data=lines.slice(1,Math.min(timeLine,latLine,lonLine)).filter(Boolean);
+  const values=[];for(const line of data){const p=line.split(",").slice(1).map(Number);if(p.length)values.push(p)}
+  return {times,lats,lons,values};
 }
-async function gfsField(cycle,fhr){
-  const r=await fetch(gfsUrl(cycle,fhr),{headers:{"User-Agent":"natgas-power-demand-bot"}});if(!r.ok)throw Error(`GFS ${r.status}`);
-  const bytes=new Uint8Array(await r.arrayBuffer());if(!bytes.length)throw Error("GFS empty GRIB2");
-  const handle=parseGrib2(bytes);const values=getGridData(handle,1);const lats=getLatitudes(handle,1);const lons=getLongitudes(handle,1);
-  let sum=0,weight=0;
-  for(let i=0;i<values.length;i++){
-    const lat=Number(lats[i]),lon=Number(lons[i]),v=Number(values[i]);
-    if(!Number.isFinite(lat)||!Number.isFinite(lon)||!Number.isFinite(v)||lat<24.5||lat>49.5||lon<-124.75||lon>-66.9)continue;
-    const w=Math.max(0,Math.cos(lat*Math.PI/180));sum+=v*w;weight+=w;
+function gfsDate(noaaDays){
+  const d=new Date(Date.UTC(1,0,1));d.setUTCDate(d.getUTCDate()+Math.floor(noaaDays-1));const frac=noaaDays-Math.floor(noaaDays);d.setUTCHours(Math.floor(frac*24),Math.round((frac*24%1)*60),0,0);return d;
+}
+async function gfsForecast(){
+  const c=latestCycle();
+  const url=`${GFS_DODS}/gfs_0p5_${c.hour}z.ascii?tmp2m[0:28][49:140][130:249]`;
+  const {times,lats,lons,values}=parseGfsAscii(await getText(url));
+  const byDate=new Map();
+  for(let t=0;t<Math.min(times.length,values.length);t++){
+    const day=gfsDate(times[t]).toLocaleDateString("en-CA",{timeZone:"America/New_York"});let sum=0,wgt=0;
+    for(let y=0;y<lats.length;y++)for(let x=0;x<lons.length;x++){
+      const lat=lats[y],lon=lons[x]-360,v=Number(values[t]?.[y*lons.length+x]);
+      if(!Number.isFinite(v)||lat<24.5||lat>49.5||lon<-124.75||lon>-66.9)continue;
+      const w=Math.cos(lat*Math.PI/180);sum+=v*w;wgt+=w;
+    }
+    if(wgt){const tempK=sum/wgt;const tempF=(tempK-273.15)*9/5+32;if(!byDate.has(day))byDate.set(day,[]);byDate.get(day).push(tempF)}
   }
-  if(!weight)throw Error("GFS CONUS grid empty");
-  const valid=cycle.getTime()+fhr*3600000;return {date:localDate(valid),valid:new Date(valid).toISOString(),tempF:(sum/weight-273.15)*9/5+32};
-}
-async function mapLimit(items,limit,fn){const out=new Array(items.length);let next=0;async function worker(){while(true){const i=next++;if(i>=items.length)return;out[i]=await fn(items[i]);}}await Promise.all(Array.from({length:limit},worker));return out;}
-async function weatherForecast(){
-  const cycle=latestCycle(),hrs=Array.from({length:29},(_,i)=>(i+1)*6);
-  const samples=await mapLimit(hrs,2,h=>gfsField(cycle,h));
-  const byDate=new Map();for(const x of samples){if(!byDate.has(x.date))byDate.set(x.date,[]);byDate.get(x.date).push(x.tempF)}
-  const today=localDate(Date.now()),days=[...byDate.keys()].sort().filter(d=>d>today).slice(0,7);
-  return days.map(date=>{const temps=byDate.get(date)||[],mean=temps.reduce((s,x)=>s+x,0)/temps.length;return {date,hdd:Math.max(65-mean,0),cdd:Math.max(mean-65,0),samples:temps.length}});
+  const today=new Date().toLocaleDateString("en-CA",{timeZone:"America/New_York"});
+  return [...byDate.keys()].sort().filter(d=>d>today).slice(0,7).map(date=>{const a=byDate.get(date),mean=a.reduce((s,v)=>s+v,0)/a.length;return {date,hdd:Math.max(65-mean,0),cdd:Math.max(mean-65,0),samples:a.length}});
 }
 function avgPrev(a,i,key,n){const v=a.slice(Math.max(0,i-n),i).map(x=>Number(x[key])).filter(Number.isFinite);return v.length?v.reduce((s,x)=>s+x,0)/v.length:null}
 function fmt(v){return v==null?"N/A":v.toFixed(1)}
@@ -70,7 +67,7 @@ async function maybeWeather(state){
   state.weather??={actual:[],forecast:[]};const last=Date.parse(state.weather.updatedAt||"");
   if(Number.isFinite(last)&&Date.now()-last<12*3600000){process.env.__NATGAS_WEATHER_BLOCK=state.weather.telegramBlock||"";return}
   try{state.weather.actual=await weatherActual()}catch(e){state.weather.error=String(e.message)}
-  try{state.weather.forecast=await weatherForecast()}catch(e){state.weather.forecastError=String(e.message)}
+  try{state.weather.forecast=await gfsForecast()}catch(e){state.weather.forecastError=String(e.message);state.weather.forecast=[]}
   state.weather.updatedAt=new Date().toISOString();state.weather.telegramBlock=weatherBlock(state.weather);process.env.__NATGAS_WEATHER_BLOCK=state.weather.telegramBlock||"";
 }
 export async function fetchEIA(path,params={},state){
