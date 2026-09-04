@@ -1,16 +1,8 @@
 import { getStore } from "@netlify/blobs";
 import { fetchEIA, dataRows } from "./eia.mjs";
 
-const SIGNALS = [
-  "gas_generation",
-  "total_load",
-  "wind_generation",
-  "solar_generation",
-  "total_generation",
-  "load_forecast",
-];
-
 const CORE_SIGNALS = ["gas_generation", "total_load", "wind_generation", "solar_generation"];
+const ALL_SIGNALS = [...CORE_SIGNALS, "total_generation", "load_forecast"];
 const store = () => getStore("natgas-power-demand");
 
 async function state() {
@@ -22,49 +14,40 @@ async function state() {
 }
 async function save(s) { await store().setJSON("state", s); }
 
-function hourET(now = new Date()) {
-  return Number(new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York", hour: "numeric", hour12: false
-  }).format(now));
-}
-
-function formatET(iso) {
-  const ms = parseAt(iso);
-  if (!Number.isFinite(ms)) return "N/A";
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York", weekday: "short", month: "short", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hour12: true, timeZoneName: "short"
-  }).format(new Date(ms));
-}
-
-function formatIndia(iso) {
-  const ms = parseAt(iso);
-  if (!Number.isFinite(ms)) return "N/A";
-  return new Intl.DateTimeFormat("en-IN", {
-    timeZone: "Asia/Kolkata", weekday: "short", month: "short", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hour12: true, timeZoneName: "short"
-  }).format(new Date(ms));
-}
-
-function due(now = new Date()) {
-  const h = hourET(now), d = new Set();
-  if ((h >= 6 && h < 18) || h % 3 === 0) {
-    d.add("gas_generation"); d.add("total_load");
-  }
-  if ([8, 12, 16].includes(h)) d.add("solar_generation");
-  if (now.getUTCHours() % 6 === 0) {
-    d.add("wind_generation");
-    d.add("load_forecast");
-  }
-  return d;
-}
-
 function parseAt(x) {
   const s = String(x ?? "").trim();
   if (!s) return NaN;
-  if (s.endsWith("Z")) return Date.parse(s);
   if (/^\d{4}-\d{2}-\d{2}T\d{2}$/.test(s)) return Date.parse(`${s}:00:00Z`);
   return Date.parse(s);
+}
+
+function hourET(now = new Date()) {
+  const ms = now instanceof Date ? now.getTime() : parseAt(now);
+  if (!Number.isFinite(ms)) return NaN;
+  return Number(new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour: "numeric", hour12: false
+  }).format(new Date(ms)));
+}
+
+function formatTime(iso, timeZone, locale = "en-US") {
+  const ms = parseAt(iso);
+  if (!Number.isFinite(ms)) return "N/A";
+  return new Intl.DateTimeFormat(locale, {
+    timeZone, weekday: "short", month: "short", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: true, timeZoneName: "short"
+  }).format(new Date(ms));
+}
+function formatET(iso) { return formatTime(iso, "America/New_York", "en-US"); }
+function formatIndia(iso) { return formatTime(iso, "Asia/Kolkata", "en-IN"); }
+
+function due(now = new Date()) {
+  const h = hourET(now), d = new Set();
+  if (Number.isFinite(h) && ((h >= 6 && h < 18) || h % 3 === 0)) {
+    d.add("gas_generation"); d.add("total_load");
+  }
+  if ([8, 12, 16].includes(h)) d.add("solar_generation");
+  if (now.getUTCHours() % 6 === 0) { d.add("wind_generation"); d.add("load_forecast"); }
+  return d;
 }
 
 function addObservation(s, signal, row) {
@@ -74,7 +57,6 @@ function addObservation(s, signal, row) {
     s.observations.push({ signal, value, at, unit: "MWh" });
   }
 }
-
 function addSeries(s, signal, rows, predicate) {
   for (const row of rows) if (predicate(row)) addObservation(s, signal, row);
 }
@@ -85,26 +67,33 @@ function addFuelMix(s, rows) {
     const at = String(row?.period || ""), value = Number(row?.value);
     if (!at || !Number.isFinite(value) || !Number.isFinite(parseAt(at))) continue;
     const fuel = String(row?.fueltype || "").toUpperCase();
-    if (!byPeriod.has(at)) byPeriod.set(at, { all: null });
+    if (!byPeriod.has(at)) byPeriod.set(at, { sum: 0, all: null, count: 0 });
     const g = byPeriod.get(at);
     if (fuel === "ALL") g.all = value;
+    else { g.sum += value; g.count++; }
   }
   for (const [at, g] of byPeriod) {
-    if (g.all != null) addObservation(s, "total_generation", { period: at, value: g.all });
+    const total = g.all != null ? g.all : (g.count ? g.sum : null);
+    if (total != null && total > 0) addObservation(s, "total_generation", { period: at, value: total });
   }
 }
 
 function rowsFor(s, signal) {
   return s.observations.filter(o => o.signal === signal && Number.isFinite(parseAt(o.at)));
 }
-
+function latest(s, signal) {
+  let best = null, bestMs = -Infinity;
+  for (const row of rowsFor(s, signal)) {
+    const ms = parseAt(row.at);
+    if (ms > bestMs) { best = row; bestMs = ms; }
+  }
+  return best;
+}
 function nearestAt(s, signal, targetMs, toleranceMs = 90 * 60 * 1000) {
   if (!Number.isFinite(targetMs)) return null;
-  const rows = rowsFor(s, signal);
   let best = null, bestDist = Infinity;
-  for (const row of rows) {
+  for (const row of rowsFor(s, signal)) {
     const rowMs = parseAt(row.at);
-    if (!Number.isFinite(rowMs)) continue;
     const dist = Math.abs(rowMs - targetMs);
     if (dist <= toleranceMs && dist < bestDist) { best = row; bestDist = dist; }
   }
@@ -115,135 +104,137 @@ function sameHourKey(iso) {
   const ms = parseAt(iso);
   if (!Number.isFinite(ms)) return null;
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", hour12: false
   }).formatToParts(new Date(ms));
   const get = type => parts.find(p => p.type === type)?.value;
-  const hour = get("hour");
-  return hour ? String(hour).padStart(2, "0") : null;
+  const year = get("year"), month = get("month"), day = get("day"), hour = get("hour");
+  return year && month && day && hour ? `${year}-${month}-${day}-${String(hour).padStart(2, "0")}` : null;
 }
 
 function sameHourAverage(s, signal, anchorAt, days) {
-  const anchorMs = parseAt(anchorAt);
-  if (!Number.isFinite(anchorMs)) return null;
-  const anchorHour = sameHourKey(anchorAt);
-  if (!anchorHour) return null;
+  const anchorMs = parseAt(anchorAt), anchorHour = sameHourKey(anchorAt);
+  if (!Number.isFinite(anchorMs) || !anchorHour) return null;
   const values = [];
   for (let d = 1; d <= days; d++) {
     const targetMs = anchorMs - d * 24 * 3600000;
     const row = nearestAt(s, signal, targetMs, 2 * 3600000);
-    if (row && sameHourKey(row.at) === anchorHour) values.push(row.value);
+    if (row && sameHourKey(row.at)?.endsWith(`-${sameHourKey(anchorAt).split("-").at(-1)}`)) values.push(row.value);
   }
   return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
 }
 
-function pct(a, b) {
-  return b != null && b !== 0 ? (a / b - 1) * 100 : null;
-}
-
+function pct(a, b) { return b != null && b !== 0 ? (a / b - 1) * 100 : null; }
 function comparison(s, signal, anchorAt, value) {
   const anchorMs = parseAt(anchorAt);
   if (!Number.isFinite(anchorMs)) return { value, v24: null, p24: null, avg3: null, p3: null, avg7: null, p7: null };
   const one = nearestAt(s, signal, anchorMs - 24 * 3600000);
   const avg3 = sameHourAverage(s, signal, anchorAt, 3);
   const avg7 = sameHourAverage(s, signal, anchorAt, 7);
-  return {
-    value,
-    v24: one?.value ?? null,
-    p24: one ? pct(value, one.value) : null,
-    avg3,
-    p3: avg3 != null ? pct(value, avg3) : null,
-    avg7,
-    p7: avg7 != null ? pct(value, avg7) : null,
-  };
-}
-
-function commonAnchor(s) {
-  const sets = CORE_SIGNALS.map(signal => new Set(rowsFor(s, signal).map(o => o.at)));
-  if (sets.some(set => set.size === 0)) return null;
-  let common = [...sets[0]].filter(at => sets.every(set => set.has(at)) && Number.isFinite(parseAt(at)));
-  common.sort((a, b) => parseAt(a) - parseAt(b));
-  return common.at(-1) || null;
+  return { value, v24: one?.value ?? null, p24: one ? pct(value, one.value) : null, avg3, p3: avg3 != null ? pct(value, avg3) : null, avg7, p7: avg7 != null ? pct(value, avg7) : null };
 }
 
 function valueAt(s, signal, anchorAt) {
   const ms = parseAt(anchorAt);
   return Number.isFinite(ms) ? nearestAt(s, signal, ms, 90 * 60 * 1000) : null;
 }
-
-function arrow(p) {
-  if (p == null) return "•";
-  if (p > 1) return "↑";
-  if (p < -1) return "↓";
-  return "→";
+function latestCommon(s, signals, toleranceMs = 90 * 60 * 1000) {
+  const anchors = signals.map(signal => latest(s, signal)).filter(Boolean);
+  if (anchors.length !== signals.length) return null;
+  const candidates = rowsFor(s, signals[0]).sort((a, b) => parseAt(b.at) - parseAt(a.at));
+  for (const candidate of candidates) {
+    const ms = parseAt(candidate.at);
+    if (signals.every(signal => nearestAt(s, signal, ms, toleranceMs))) return candidate.at;
+  }
+  return null;
 }
 
-function signedPct(p) {
-  return p == null ? "N/A" : `${p >= 0 ? "+" : ""}${p.toFixed(1)}%`;
+function arrow(p) { return p == null ? "•" : p > 1 ? "↑" : p < -1 ? "↓" : "→"; }
+function signedPct(p) { return p == null ? "N/A" : `${p >= 0 ? "+" : ""}${p.toFixed(1)}%`; }
+function fmtMWh(v) { return v == null ? "N/A" : `${Math.round(v).toLocaleString("en-US")} MWh`; }
+function directionIcon(p, positiveIsGood = true) {
+  if (p == null) return "⚪";
+  const x = positiveIsGood ? p : -p;
+  return x > 1 ? "🟢" : x < -1 ? "🔴" : "🟡";
 }
 
-function fmtMWh(v) {
-  return v == null ? "N/A" : `${Math.round(v).toLocaleString("en-US")} MWh`;
-}
-
-function report(s, anchorAt) {
+function report(s) {
+  const latestRows = Object.fromEntries(ALL_SIGNALS.map(signal => [signal, latest(s, signal)]));
   const rows = {};
   for (const signal of CORE_SIGNALS) {
-    const r = valueAt(s, signal, anchorAt);
-    rows[signal] = r ? comparison(s, signal, anchorAt, r.value) : null;
+    const r = latestRows[signal];
+    rows[signal] = r ? comparison(s, signal, r.at, r.value) : null;
   }
 
-  const gas = rows.gas_generation?.value;
-  const load = rows.total_load?.value;
-  const wind = rows.wind_generation?.value;
-  const solar = rows.solar_generation?.value;
-  const totalGen = valueAt(s, "total_generation", anchorAt)?.value ?? null;
+  const loadRow = latestRows.total_load;
+  const gasRow = latestRows.gas_generation;
+  const windRow = latestRows.wind_generation;
+  const solarRow = latestRows.solar_generation;
+  const totalGenRow = latestRows.total_generation;
+  const forecastRow = latestRows.load_forecast;
+
+  const load = loadRow?.value ?? null;
+  const gas = gasRow?.value ?? null;
+  const wind = windRow?.value ?? null;
+  const solar = solarRow?.value ?? null;
+  const totalGen = totalGenRow?.value ?? null;
+
   const residual = load != null && wind != null && solar != null ? load - wind - solar : null;
-  const gasShare = gas != null && totalGen ? gas / totalGen * 100 : null;
-  const renewableShare = wind != null && solar != null && totalGen ? (wind + solar) / totalGen * 100 : null;
-
-  const anchorMs = parseAt(anchorAt);
-  const residual24 = (() => {
-    const l = nearestAt(s, "total_load", anchorMs - 24 * 3600000);
-    const w = nearestAt(s, "wind_generation", anchorMs - 24 * 3600000);
-    const so = nearestAt(s, "solar_generation", anchorMs - 24 * 3600000);
+  const residualAnchor = latestCommon(s, ["total_load", "wind_generation", "solar_generation"]);
+  const residualAnchorMs = parseAt(residualAnchor);
+  const residualCurrent = residualAnchor ? (() => {
+    const l = valueAt(s, "total_load", residualAnchor)?.value;
+    const w = valueAt(s, "wind_generation", residualAnchor)?.value;
+    const so = valueAt(s, "solar_generation", residualAnchor)?.value;
+    return l != null && w != null && so != null ? l - w - so : null;
+  })() : residual;
+  const residual24 = residualAnchor ? (() => {
+    const l = nearestAt(s, "total_load", residualAnchorMs - 24 * 3600000);
+    const w = nearestAt(s, "wind_generation", residualAnchorMs - 24 * 3600000);
+    const so = nearestAt(s, "solar_generation", residualAnchorMs - 24 * 3600000);
     return l && w && so ? l.value - w.value - so.value : null;
-  })();
-  const residual3 = (() => {
-    const l = sameHourAverage(s, "total_load", anchorAt, 3);
-    const w = sameHourAverage(s, "wind_generation", anchorAt, 3);
-    const so = sameHourAverage(s, "solar_generation", anchorAt, 3);
+  })() : null;
+  const residual3 = residualAnchor ? (() => {
+    const l = sameHourAverage(s, "total_load", residualAnchor, 3);
+    const w = sameHourAverage(s, "wind_generation", residualAnchor, 3);
+    const so = sameHourAverage(s, "solar_generation", residualAnchor, 3);
     return l != null && w != null && so != null ? l - w - so : null;
-  })();
-  const residual7 = (() => {
-    const l = sameHourAverage(s, "total_load", anchorAt, 7);
-    const w = sameHourAverage(s, "wind_generation", anchorAt, 7);
-    const so = sameHourAverage(s, "solar_generation", anchorAt, 7);
+  })() : null;
+  const residual7 = residualAnchor ? (() => {
+    const l = sameHourAverage(s, "total_load", residualAnchor, 7);
+    const w = sameHourAverage(s, "wind_generation", residualAnchor, 7);
+    const so = sameHourAverage(s, "solar_generation", residualAnchor, 7);
     return l != null && w != null && so != null ? l - w - so : null;
-  })();
+  })() : null;
 
-  const forecast = valueAt(s, "load_forecast", anchorAt)?.value ?? null;
-  const forecastSurprise = load != null && forecast != null ? (load - forecast) / forecast * 100 : null;
+  const gasShare = gas != null && totalGen > 0 ? gas / totalGen * 100 : null;
+  const renewableShare = wind != null && solar != null && totalGen > 0 ? (wind + solar) / totalGen * 100 : null;
+  const forecast = forecastRow?.value ?? null;
+  const forecastAtLoad = loadRow ? nearestAt(s, "load_forecast", parseAt(loadRow.at), 90 * 60 * 1000) : null;
+  const forecastComparable = forecastAtLoad?.value ?? null;
+  const forecastSurprise = load != null && forecastComparable != null ? (load / forecastComparable - 1) * 100 : null;
 
-  const pressure = [];
-  if (rows.gas_generation?.p24 != null) pressure.push(rows.gas_generation.p24);
-  if (rows.total_load?.p24 != null) pressure.push(rows.total_load.p24 * 0.7);
-  if (rows.wind_generation?.p24 != null) pressure.push(-rows.wind_generation.p24 * 0.35);
-  if (rows.solar_generation?.p24 != null) pressure.push(-rows.solar_generation.p24 * 0.35);
-  const score = pressure.length >= 2 ? pressure.reduce((a, b) => a + b, 0) / pressure.length : null;
+  const p = [rows.gas_generation?.p24, rows.total_load?.p24, rows.wind_generation?.p24 != null ? -rows.wind_generation.p24 : null, rows.solar_generation?.p24 != null ? -rows.solar_generation.p24 : null].filter(v => v != null);
+  const score = p.length >= 2 ? p.reduce((a, b) => a + b, 0) / p.length : null;
+  const residualPct24 = pct(residualCurrent, residual24);
+  const divergence = rows.gas_generation?.p24 != null && residualPct24 != null && ((rows.gas_generation.p24 > 1 && residualPct24 < -1) || (rows.gas_generation.p24 < -1 && residualPct24 > 1));
+  const overall = score == null ? "⚪ INSUFFICIENT DATA" : score >= 2 ? "🟢 ELEVATED" : score <= -2 ? "🔴 REDUCED" : "🟡 MIXED";
 
-  const state = score == null ? "⚪ INSUFFICIENT DATA" : score >= 2 ? "🟢 ELEVATED" : score <= -2 ? "🔴 REDUCED" : "🟡 MIXED";
-  const residualPct24 = pct(residual, residual24);
-  const divergence = score != null && rows.gas_generation?.p24 != null && residualPct24 != null
-    ? (rows.gas_generation.p24 > 1 && residualPct24 < -1) || (rows.gas_generation.p24 < -1 && residualPct24 > 1)
-    : false;
+  const latestDataMs = Math.max(...ALL_SIGNALS.map(signal => parseAt(latestRows[signal]?.at)).filter(Number.isFinite));
+  const latestDataAt = Number.isFinite(latestDataMs) ? new Date(latestDataMs).toISOString() : null;
+  const freshness = signal => {
+    const at = latestRows[signal]?.at, ms = parseAt(at);
+    if (!Number.isFinite(ms) || !Number.isFinite(latestDataMs)) return "N/A";
+    const hours = Math.max(0, (latestDataMs - ms) / 3600000);
+    return hours < 1 ? "<1h" : `${hours.toFixed(hours < 10 ? 1 : 0)}h`;
+  };
 
-  const forecastIcon = forecastSurprise == null ? "⚪" : forecastSurprise > 1 ? "🟢" : forecastSurprise < -1 ? "🔴" : "🟡";
   const lines = [
     "🔥 U.S. POWER → NATGAS",
     "━━━━━━━━━━━━━━━━━━━━",
     "",
-    `🇺🇸 US ET: ${formatET(anchorAt)}`,
-    `🇮🇳 India: ${formatIndia(anchorAt)}`,
+    `🇺🇸 US ET: ${latestDataAt ? formatET(latestDataAt) : "N/A"}`,
+    `🇮🇳 India: ${latestDataAt ? formatIndia(latestDataAt) : "N/A"}`,
     "",
     "⚡ POWER DEMAND",
     `Now              ${fmtMWh(load)}`,
@@ -271,26 +262,33 @@ function report(s, anchorAt) {
     `vs 7D avg          ${arrow(rows.solar_generation?.p7)} ${signedPct(rows.solar_generation?.p7)}`,
     "",
     "⚡ RESIDUAL LOAD",
-    `Load − Wind − Solar   ${fmtMWh(residual)}`,
+    `Load − Wind − Solar ${fmtMWh(residualCurrent)}`,
     `vs 24h             ${arrow(residualPct24)} ${signedPct(residualPct24)}`,
-    `vs 3D avg          ${arrow(pct(residual, residual3))} ${signedPct(pct(residual, residual3))}`,
-    `vs 7D avg          ${arrow(pct(residual, residual7))} ${signedPct(pct(residual, residual7))}`,
+    `vs 3D avg          ${arrow(pct(residualCurrent, residual3))} ${signedPct(pct(residualCurrent, residual3))}`,
+    `vs 7D avg          ${arrow(pct(residualCurrent, residual7))} ${signedPct(pct(residualCurrent, residual7))}`,
     `Renewable share    ${renewableShare == null ? "N/A" : renewableShare.toFixed(1) + "%"}`,
     "",
     "🔮 LOAD EXPECTATION",
     `Actual             ${fmtMWh(load)}`,
-    `Forecast           ${fmtMWh(forecast)}`,
+    `Forecast           ${fmtMWh(forecastComparable ?? forecast)}`,
     `Actual vs forecast ${arrow(forecastSurprise)} ${signedPct(forecastSurprise)}`,
     "",
     "━━━━━━━━━━━━━━━━━━━━",
     "📊 FUNDAMENTAL STATE",
-    `Power demand       ${rows.total_load ? "🟢" : "⚪"}`,
-    `Gas burn           ${rows.gas_generation ? "🟢" : "⚪"}`,
-    `Renewables         ${renewableShare != null ? "🟢" : "⚪"}`,
-    `Residual load      ${residual != null ? "🟢" : "⚪"}`,
-    `Forecast surprise  ${forecastIcon}`,
-    `Overall             ${state}`,
+    `Power demand       ${directionIcon(rows.total_load?.p24, true)}`,
+    `Gas burn           ${directionIcon(rows.gas_generation?.p24, true)}`,
+    `Renewables         ${directionIcon(renewableShare != null ? -((renewableShare - (renewableShare)) || 0) : null, true)}`,
+    `Residual load      ${directionIcon(residualPct24, true)}`,
+    `Forecast surprise  ${directionIcon(forecastSurprise, true)}`,
+    `Overall             ${overall}`,
     `Divergence         ${divergence ? "⚠️ DETECTED" : "NONE"}`,
+    "",
+    "🕐 DATA FRESHNESS",
+    `Load               ${freshness("total_load")}`,
+    `Gas                ${freshness("gas_generation")}`,
+    `Wind               ${freshness("wind_generation")}`,
+    `Solar              ${freshness("solar_generation")}`,
+    `Forecast           ${freshness("load_forecast")}`,
     "",
     "🚨 Generation outages: N/A",
     "EIA-930 does not provide a validated all-generator U.S. outage series.",
@@ -327,7 +325,6 @@ export default async () => {
     addSeries(s, "total_load", r, x => x.type === "D");
     addSeries(s, "load_forecast", r, x => x.type === "DF");
   }
-
   if (d.has("gas_generation") || d.has("wind_generation") || d.has("solar_generation")) {
     const p = await fetchEIA("/electricity/rto/fuel-type-data/data/", {
       ...common, "facets[respondent][]": "US48"
@@ -339,19 +336,17 @@ export default async () => {
     addFuelMix(s, r);
   }
 
-  s.observations = s.observations
-    .filter(o => Number.isFinite(parseAt(o.at)))
-    .sort((a, b) => parseAt(a.at) - parseAt(b.at))
-    .slice(-15000);
+  s.observations = s.observations.filter(o => Number.isFinite(parseAt(o.at)))
+    .sort((a, b) => parseAt(a.at) - parseAt(b.at)).slice(-15000);
   s.lastRun = now.toISOString();
   await save(s);
 
-  const anchorAt = commonAnchor(s);
-  if (d.size && anchorAt) await telegram(report(s, anchorAt));
+  if (d.size) await telegram(report(s));
 
   return new Response(JSON.stringify({
     ok: true, source: "EIA", due: [...d], unavailable: ["generation_outages"],
-    usage: s.usage, observationCount: s.observations.length, anchorAt
+    usage: s.usage, observationCount: s.observations.length,
+    latest: Object.fromEntries(ALL_SIGNALS.map(signal => [signal, latest(s, signal)?.at || null]))
   }), { headers: { "content-type": "application/json" } });
 };
 
