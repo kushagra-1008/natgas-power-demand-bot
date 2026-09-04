@@ -2,8 +2,9 @@
   "name": "natgas-power-demand-bot",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=18" },
+  "engines": { "node": ">=22" },
   "dependencies": {
-    "@netlify/blobs": "^9.0.0"
+    "@netlify/blobs": "^9.0.0",
+    "@azohra/meteo.grib": "^0.3.0"
   }
 }
