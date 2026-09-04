@@ -4,8 +4,8 @@ from app.schedule import due_signals
 
 
 def test_daytime_hourly_signals():
-    # 13:00 UTC = 09:00 New York during daylight saving time.
-    due = due_signals(datetime(2026, 7, 1, 13, tzinfo=timezone.utc))
+    # 12:00 UTC = 08:00 New York during daylight saving time.
+    due = due_signals(datetime(2026, 7, 1, 12, tzinfo=timezone.utc))
     assert {"gas_generation", "total_load", "solar_generation"}.issubset(due)
 
 
