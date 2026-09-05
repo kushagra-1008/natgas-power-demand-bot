@@ -35,12 +35,12 @@ async function syncObservations(client, observations) {
   for (const batch of chunks(newRows, 500)) {
     const values = [];
     const placeholders = batch.map((o, i) => {
-      const n = i * 6;
+      const n = i * 7;
       values.push("EIA", o.signal, "US48", new Date(parseAt(o.at)), Number(o.value), o.unit || "MWh");
-      return `($${n + 1}, $${n + 2}, $${n + 3}, $${n + 4}, $${n + 5}, '{}'::jsonb)`;
+      return `($${n + 1}, $${n + 2}, $${n + 3}, $${n + 4}, $${n + 5}, $${n + 6}, '{}'::jsonb)`;
     });
     const result = await client.query(
-      `INSERT INTO observations (source, metric, region, observed_at, value, metadata)
+      `INSERT INTO observations (source, metric, region, observed_at, value, unit, metadata)
        VALUES ${placeholders.join(",")}
        ON CONFLICT (source, metric, region, observed_at) DO NOTHING`,
       values
@@ -58,14 +58,14 @@ async function syncForecasts(client, observations, issuedAt) {
   for (const batch of chunks(rows, 500)) {
     const values = [];
     const placeholders = batch.map((o, i) => {
-      const n = i * 8;
+      const n = i * 9;
       const targetAt = new Date(parseAt(o.at));
       const horizonHours = Math.round((targetAt.getTime() - issuedAt.getTime()) / 3600000);
-      values.push("EIA", "load_forecast", "US48", issuedAt, targetAt, Number(o.value), horizonHours);
-      return `($${n + 1}, $${n + 2}, $${n + 3}, $${n + 4}, $${n + 5}, $${n + 6}, $${n + 7}, '{}'::jsonb)`;
+      values.push("EIA", "load_forecast", "US48", issuedAt, targetAt, Number(o.value), o.unit || "MWh", horizonHours);
+      return `($${n + 1}, $${n + 2}, $${n + 3}, $${n + 4}, $${n + 5}, $${n + 6}, $${n + 7}, $${n + 8}, '{}'::jsonb)`;
     });
     const result = await client.query(
-      `INSERT INTO forecasts (source, metric, region, issued_at, target_at, value, horizon_hours, metadata)
+      `INSERT INTO forecasts (source, metric, region, issued_at, target_at, value, unit, horizon_hours, metadata)
        VALUES ${placeholders.join(",")}
        ON CONFLICT (source, metric, region, issued_at, target_at) DO NOTHING`,
       values
