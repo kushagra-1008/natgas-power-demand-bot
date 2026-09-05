@@ -35,7 +35,7 @@ async function syncObservations(client, observations) {
   for (const batch of chunks(newRows, 500)) {
     const values = [];
     const placeholders = batch.map((o, i) => {
-      const n = i * 7;
+      const n = i * 6;
       values.push("EIA", o.signal, "US48", new Date(parseAt(o.at)), Number(o.value), o.unit || "MWh");
       return `($${n + 1}, $${n + 2}, $${n + 3}, $${n + 4}, $${n + 5}, $${n + 6}, '{}'::jsonb)`;
     });
@@ -58,7 +58,7 @@ async function syncForecasts(client, observations, issuedAt) {
   for (const batch of chunks(rows, 500)) {
     const values = [];
     const placeholders = batch.map((o, i) => {
-      const n = i * 9;
+      const n = i * 8;
       const targetAt = new Date(parseAt(o.at));
       const horizonHours = Math.round((targetAt.getTime() - issuedAt.getTime()) / 3600000);
       values.push("EIA", "load_forecast", "US48", issuedAt, targetAt, Number(o.value), o.unit || "MWh", horizonHours);
