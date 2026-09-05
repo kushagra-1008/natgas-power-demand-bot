@@ -4,6 +4,7 @@
   "type": "module",
   "engines": { "node": ">=22" },
   "dependencies": {
-    "@netlify/blobs": "^9.0.0"
+    "@netlify/blobs": "^9.0.0",
+    "@netlify/database": "latest"
   }
 }
