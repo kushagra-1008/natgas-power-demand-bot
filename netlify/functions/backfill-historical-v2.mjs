@@ -13,6 +13,17 @@ function addDays(date, days) {
   return d.toISOString().slice(0, 10);
 }
 
+function parseTimestamp(value) {
+  if (value === null || value === undefined) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  let ms = Date.parse(s);
+  if (!Number.isFinite(ms) && /^\d{4}-\d{2}-\d{2}T\d{2}$/.test(s)) {
+    ms = Date.parse(`${s}:00:00Z`);
+  }
+  return Number.isFinite(ms) ? new Date(ms) : null;
+}
+
 async function eia(path, params) {
   const key = process.env.EIA_API_KEY;
   if (!key) throw new Error("Missing EIA_API_KEY");
@@ -48,7 +59,7 @@ async function upsertObservations(client, rows) {
     const values = [];
     const placeholders = batch.map((r, j) => {
       const p = j * 6;
-      values.push("EIA", r.metric, "US48", new Date(r.at), r.value, "MWh");
+      values.push("EIA", r.metric, "US48", r.at, r.value, "MWh");
       return `($${p + 1},$${p + 2},$${p + 3},$${p + 4},$${p + 5},$${p + 6},'{}'::jsonb)`;
     });
     const result = await client.query(
@@ -80,17 +91,19 @@ async function runEiaChunk(client, start, end) {
   const rows = [];
   for (const r of load) {
     const value = Number(r.value);
-    if (Number.isFinite(value)) rows.push({ metric: "total_load", at: r.period, value });
+    const at = parseTimestamp(r.period);
+    if (Number.isFinite(value) && at) rows.push({ metric: "total_load", at, value });
   }
 
   const byPeriod = new Map();
   for (const r of fuel) {
     const value = Number(r.value);
-    if (!Number.isFinite(value)) continue;
-    const at = String(r.period || "");
+    const at = parseTimestamp(r.period);
+    if (!Number.isFinite(value) || !at) continue;
+    const key = at.toISOString();
     const fueltype = String(r.fueltype || "").toUpperCase();
-    if (!byPeriod.has(at)) byPeriod.set(at, {});
-    const x = byPeriod.get(at);
+    if (!byPeriod.has(key)) byPeriod.set(key, {});
+    const x = byPeriod.get(key);
     if (fueltype === "NG") x.gas_generation = value;
     if (fueltype === "WND") x.wind_generation = value;
     if (fueltype === "SUN") x.solar_generation = value;
@@ -98,7 +111,7 @@ async function runEiaChunk(client, start, end) {
   }
   for (const [at, x] of byPeriod) {
     for (const metric of ["gas_generation", "wind_generation", "solar_generation", "total_generation"]) {
-      if (Number.isFinite(x[metric])) rows.push({ metric, at, value: x[metric] });
+      if (Number.isFinite(x[metric])) rows.push({ metric, at: new Date(at), value: x[metric] });
     }
   }
   return upsertObservations(client, rows);
