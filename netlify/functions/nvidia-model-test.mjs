@@ -53,9 +53,21 @@ async function liveFacts() {
   const fuel = dataRows(fuelPayload), loadRows = dataRows(loadPayload);
   const load = latest(loadRows, r => String(r.type) === "D");
   const anchor = load?.at || latest(fuel, () => true)?.at || null;
-  const key = anchor ? sameHourKey(anchor) : null;
-  const atFuel = fuel.filter(r => sameHourKey(r.period) === key);
-  const byFuel = new Map(atFuel.map(r => [String(r.fueltype || "").toUpperCase(), Number(r.value)]));
+  const anchorMs = parseAt(anchor);
+
+  // Fuel rows use the same EIA period timestamp as load. Match the exact
+  // normalized timestamp first; fall back to the nearest row within one hour.
+  const atFuel = fuel.filter(r => {
+    const ms = parseAt(r.period);
+    return Number.isFinite(anchorMs) && Number.isFinite(ms) && Math.abs(ms - anchorMs) < 3600000;
+  });
+  const byFuel = new Map();
+  for (const r of atFuel) {
+    const key = String(r.fueltype || "").trim().toUpperCase();
+    const value = Number(r.value);
+    if (key && Number.isFinite(value)) byFuel.set(key, value);
+  }
+
   const gas = Number.isFinite(byFuel.get("NG")) ? byFuel.get("NG") : null;
   const wind = Number.isFinite(byFuel.get("WND")) ? byFuel.get("WND") : null;
   const solar = Number.isFinite(byFuel.get("SUN")) ? byFuel.get("SUN") : null;
@@ -94,13 +106,12 @@ async function callModel(model, facts, apiKey) {
       },
       { role: "user", content: JSON.stringify(facts) }
     ],
-    temperature: 0.2,
-    max_tokens: 900,
+    temperature: 1.0,
+    top_p: 0.95,
+    reasoning_effort: model.reasoning,
+    max_tokens: 2500,
     stream: false
   };
-  if (model.id.includes("kimi-k3")) body.reasoning_effort = model.reasoning;
-  else if (model.id.includes("deepseek-v4")) body.extra_body = { chat_template_kwargs: { thinking: true, reasoning_effort: model.reasoning } };
-  else if (model.id.includes("nemotron-3-super")) body.extra_body = { chat_template_kwargs: { enable_thinking: true } };
 
   const response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
     method: "POST",
