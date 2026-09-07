@@ -1,6 +1,8 @@
 import { getStore } from "@netlify/blobs";
+import pg from "pg";
 import { fetchEIA, dataRows } from "./eia.mjs";
 
+const { Pool } = pg;
 const CORE_SIGNALS = ["gas_generation", "total_load", "wind_generation", "solar_generation"];
 const ALL_SIGNALS = [...CORE_SIGNALS, "total_generation", "load_forecast"];
 const store = () => getStore("natgas-power-demand");
@@ -121,7 +123,55 @@ function directionIcon(p, positiveIsSupportive = true) {
   return x > 1 ? "🟢" : x < -1 ? "🔴" : "🟡";
 }
 
-function report(s) {
+async function lastYearValues(anchorAt, signals) {
+  if (!process.env.DATABASE_URL) return {};
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1, idleTimeoutMillis: 5000, connectionTimeoutMillis: 10000 });
+  try {
+    const result = await pool.query(
+      `WITH target AS (
+         SELECT
+           (($1::timestamptz AT TIME ZONE 'America/New_York')::date - INTERVAL '1 year')::date AS local_date,
+           EXTRACT(HOUR FROM ($1::timestamptz AT TIME ZONE 'America/New_York'))::int AS local_hour
+       )
+       SELECT o.metric, o.value, o.observed_at
+       FROM observations o, target t
+       WHERE o.source = 'EIA'
+         AND o.region = 'US48'
+         AND o.metric = ANY($2::text[])
+         AND (o.observed_at AT TIME ZONE 'America/New_York')::date = t.local_date
+         AND EXTRACT(HOUR FROM (o.observed_at AT TIME ZONE 'America/New_York'))::int = t.local_hour
+       ORDER BY o.metric, o.observed_at` ,
+      [anchorAt, signals]
+    );
+    const out = {};
+    for (const row of result.rows) if (out[row.metric] == null) out[row.metric] = Number(row.value);
+    return out;
+  } finally {
+    await pool.end();
+  }
+}
+
+async function yearOverYear(s, anchorAt, current) {
+  const metrics = ["total_load", "gas_generation", "wind_generation", "solar_generation", "total_generation"];
+  const last = await lastYearValues(anchorAt, metrics);
+  const out = {};
+  for (const metric of metrics) out[metric] = last[metric] != null && current[metric] != null ? { value: last[metric], pct: pct(current[metric], last[metric]) } : null;
+  if (out.total_load && out.wind_generation && out.solar_generation) {
+    const currentResidual = current.total_load - current.wind_generation - current.solar_generation;
+    const lastResidual = last.total_load - last.wind_generation - last.solar_generation;
+    out.residual_load = { value: lastResidual, pct: pct(currentResidual, lastResidual) };
+  } else out.residual_load = null;
+  if (out.total_generation && out.wind_generation && out.solar_generation) {
+    const currentShare = (current.wind_generation + current.solar_generation) / current.total_generation * 100;
+    const lastShare = (last.wind_generation + last.solar_generation) / last.total_generation * 100;
+    out.renewable_share = { value: lastShare, pct: currentShare - lastShare };
+  } else out.renewable_share = null;
+  return out;
+}
+
+function yoyLine(yoy) { return yoy == null ? "vs LY              N/A" : `vs LY              ${arrow(yoy.pct)} ${signedPct(yoy.pct)}`; }
+
+async function report(s) {
   const latestRows = Object.fromEntries(ALL_SIGNALS.map(signal => [signal, latest(s, signal)]));
   const rows = {};
   for (const signal of CORE_SIGNALS) { const r = latestRows[signal]; rows[signal] = r ? comparison(s, signal, r.at, r.value) : null; }
@@ -129,6 +179,9 @@ function report(s) {
   const loadRow = latestRows.total_load, gasRow = latestRows.gas_generation, windRow = latestRows.wind_generation, solarRow = latestRows.solar_generation, totalGenRow = latestRows.total_generation;
   const load = loadRow?.value ?? null, gas = gasRow?.value ?? null, wind = windRow?.value ?? null, solar = solarRow?.value ?? null, totalGen = totalGenRow?.value ?? null;
   const residual = load != null && wind != null && solar != null ? load - wind - solar : null;
+  const current = { total_load: load, gas_generation: gas, wind_generation: wind, solar_generation: solar, total_generation: totalGen };
+  const yoyAnchor = loadRow?.at || gasRow?.at || windRow?.at || solarRow?.at || null;
+  const yoy = yoyAnchor ? await yearOverYear(s, yoyAnchor, current) : {};
 
   const residualAnchor = latestCommon(s, ["total_load", "wind_generation", "solar_generation"]), residualAnchorMs = parseAt(residualAnchor);
   const residualCurrent = residualAnchor ? (() => {
@@ -141,6 +194,7 @@ function report(s) {
   })() : null;
   const residual3 = residualAnchor ? (() => { const l = sameHourAverage(s, "total_load", residualAnchor, 3), w = sameHourAverage(s, "wind_generation", residualAnchor, 3), so = sameHourAverage(s, "solar_generation", residualAnchor, 3); return l != null && w != null && so != null ? l - w - so : null; })() : null;
   const residual7 = residualAnchor ? (() => { const l = sameHourAverage(s, "total_load", residualAnchor, 7), w = sameHourAverage(s, "wind_generation", residualAnchor, 7), so = sameHourAverage(s, "solar_generation", residualAnchor, 7); return l != null && w != null && so != null ? l - w - so : null; })() : null;
+  const residualYoy = yoy.residual_load;
 
   const gasShare = gas != null && totalGen > 0 ? gas / totalGen * 100 : null;
   const previousGen = latestRows.total_generation && nearestAt(s, "total_generation", parseAt(latestRows.total_generation.at) - 24 * 3600000)?.value;
@@ -177,33 +231,39 @@ function report(s) {
     `Now              ${fmtMWh(load)}`,
     `vs 24h             ${arrow(rows.total_load?.p24)} ${signedPct(rows.total_load?.p24)}`,
     `vs 3D avg          ${arrow(rows.total_load?.p3)} ${signedPct(rows.total_load?.p3)}`,
-    `vs 7D avg          ${arrow(rows.total_load?.p7)} ${signedPct(rows.total_load?.p7)}`, "",
+    `vs 7D avg          ${arrow(rows.total_load?.p7)} ${signedPct(rows.total_load?.p7)}`,
+    yoyLine(yoy.total_load), "",
     "🔥 GAS BURN",
     `Now              ${fmtMWh(gas)}`,
     `vs 24h             ${arrow(rows.gas_generation?.p24)} ${signedPct(rows.gas_generation?.p24)}`,
     `vs 3D avg          ${arrow(rows.gas_generation?.p3)} ${signedPct(rows.gas_generation?.p3)}`,
     `vs 7D avg          ${arrow(rows.gas_generation?.p7)} ${signedPct(rows.gas_generation?.p7)}`,
+    yoyLine(yoy.gas_generation),
     `Gas share          ${gasShare == null ? "N/A" : gasShare.toFixed(1) + "%"}`, "",
     "🌬️ WIND",
     `Now              ${fmtMWh(wind)}`,
     `vs 24h             ${arrow(rows.wind_generation?.p24)} ${signedPct(rows.wind_generation?.p24)}`,
     `vs 3D avg          ${arrow(rows.wind_generation?.p3)} ${signedPct(rows.wind_generation?.p3)}`,
-    `vs 7D avg          ${arrow(rows.wind_generation?.p7)} ${signedPct(rows.wind_generation?.p7)}`, "",
+    `vs 7D avg          ${arrow(rows.wind_generation?.p7)} ${signedPct(rows.wind_generation?.p7)}`,
+    yoyLine(yoy.wind_generation), "",
     "☀️ SOLAR",
     `Now              ${fmtMWh(solar)}`,
     `vs 24h             ${arrow(rows.solar_generation?.p24)} ${signedPct(rows.solar_generation?.p24)}`,
     `vs 3D avg          ${arrow(rows.solar_generation?.p3)} ${signedPct(rows.solar_generation?.p3)}`,
-    `vs 7D avg          ${arrow(rows.solar_generation?.p7)} ${signedPct(rows.solar_generation?.p7)}`, "",
+    `vs 7D avg          ${arrow(rows.solar_generation?.p7)} ${signedPct(rows.solar_generation?.p7)}`,
+    yoyLine(yoy.solar_generation), "",
     "⚡ RESIDUAL LOAD",
     `Load − Wind − Solar ${fmtMWh(residualCurrent)}`,
     `vs 24h             ${arrow(residualPct24)} ${signedPct(residualPct24)}`,
     `vs 3D avg          ${arrow(pct(residualCurrent, residual3))} ${signedPct(pct(residualCurrent, residual3))}`,
     `vs 7D avg          ${arrow(pct(residualCurrent, residual7))} ${signedPct(pct(residualCurrent, residual7))}`,
+    yoyLine(residualYoy),
     `Renewable share    ${renewableShare == null ? "N/A" : renewableShare.toFixed(1) + "%"}`, "",
     "🔮 LOAD EXPECTATION",
     `Actual             ${fmtMWh(load)}`,
     `Forecast           ${fmtMWh(forecast)}`,
-    `Actual vs forecast ${arrow(forecastSurprise)} ${signedPct(forecastSurprise)}`, "",
+    `Actual vs forecast ${arrow(forecastSurprise)} ${signedPct(forecastSurprise)}`,
+    "vs LY              N/A (historical forecast vintages not stored)", "",
     "━━━━━━━━━━━━━━━━━━━━", "📊 FUNDAMENTAL STATE",
     `Power demand       ${directionIcon(rows.total_load?.p24, true)}`,
     `Gas burn           ${directionIcon(rows.gas_generation?.p24, true)}`,
@@ -254,7 +314,7 @@ export default async () => {
   s.observations = s.observations.filter(o => Number.isFinite(parseAt(o.at))).sort((a, b) => parseAt(a.at) - parseAt(b.at)).slice(-15000);
   s.lastRun = now.toISOString();
   await save(s);
-  if (d.size) await telegram(report(s));
+  if (d.size) await telegram(await report(s));
 
   return new Response(JSON.stringify({ ok: true, source: "EIA", due: [...d], unavailable: ["generation_outages"], usage: s.usage, observationCount: s.observations.length, latest: Object.fromEntries(ALL_SIGNALS.map(signal => [signal, latest(s, signal)?.at || null])) }), { headers: { "content-type": "application/json" } });
 };
