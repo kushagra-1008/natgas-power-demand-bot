@@ -16,25 +16,17 @@ function parseAt(value) {
 function sameHourKey(value) {
   const ms = parseAt(value);
   if (!Number.isFinite(ms)) return null;
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: ET, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false
-  }).formatToParts(new Date(ms));
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: ET, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false }).formatToParts(new Date(ms));
   const get = type => parts.find(x => x.type === type)?.value;
   return `${get("year")}-${get("month")}-${get("day")}-${get("hour")}`;
 }
 function formatTime(value, tz = ET) {
   const ms = parseAt(value);
   if (!Number.isFinite(ms)) return "N/A";
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: tz, weekday: "short", month: "short", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hour12: true, timeZoneName: "short"
-  }).format(new Date(ms));
+  return new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: true, timeZoneName: "short" }).format(new Date(ms));
 }
 function latest(rows, predicate) {
-  return rows.filter(predicate)
-    .map(r => ({ ...r, value: Number(r.value), at: String(r.period || "") }))
-    .filter(r => Number.isFinite(r.value) && Number.isFinite(parseAt(r.at)))
-    .sort((a, b) => parseAt(b.at) - parseAt(a.at))[0] || null;
+  return rows.filter(predicate).map(r => ({ ...r, value: Number(r.value), at: String(r.period || "") })).filter(r => Number.isFinite(r.value) && Number.isFinite(parseAt(r.at))).sort((a, b) => parseAt(b.at) - parseAt(a.at))[0] || null;
 }
 function nearest(rows, targetMs, predicate, tolerance = 90 * 60 * 1000) {
   let best = null, distance = Infinity;
@@ -47,33 +39,17 @@ function nearest(rows, targetMs, predicate, tolerance = 90 * 60 * 1000) {
   }
   return best;
 }
-function average(values) {
-  const v = values.filter(Number.isFinite);
-  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
-}
-function percent(current, base) {
-  return Number.isFinite(current) && Number.isFinite(base) && base !== 0 ? (current / base - 1) * 100 : null;
-}
-function percentagePoint(current, base) {
-  return Number.isFinite(current) && Number.isFinite(base) ? current - base : null;
-}
-function signed(value, digits = 1) {
-  return value == null ? "N/A" : `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
-}
-function signedPP(value) {
-  return value == null ? "N/A" : `${value >= 0 ? "+" : ""}${value.toFixed(1)} pp`;
-}
-function fmtMWh(value) {
-  return value == null ? "N/A" : `${Math.round(value).toLocaleString("en-US")} MWh`;
-}
-function fmtNum(value, digits = 1) {
-  return value == null ? "N/A" : Number(value).toFixed(digits);
-}
-function arrow(value) {
-  return value == null ? "→" : value > 1 ? "↑" : value < -1 ? "↓" : "→";
-}
-function fuelPredicate(code) {
-  return row => String(row.fueltype || row["fuel-type"] || row.fuel_type || "").toUpperCase() === code;
+function average(values) { const v = values.filter(Number.isFinite); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; }
+function percent(current, base) { return Number.isFinite(current) && Number.isFinite(base) && base !== 0 ? (current / base - 1) * 100 : null; }
+function percentagePoint(current, base) { return Number.isFinite(current) && Number.isFinite(base) ? current - base : null; }
+function signed(value, digits = 1) { return value == null ? "N/A" : `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`; }
+function signedPP(value) { return value == null ? "N/A" : `${value >= 0 ? "+" : ""}${value.toFixed(1)} pp`; }
+function fmtMWh(value) { return value == null ? "N/A" : `${Math.round(value).toLocaleString("en-US")} MWh`; }
+function fmtNum(value, digits = 1) { return value == null ? "N/A" : Number(value).toFixed(digits); }
+function arrow(value) { return value == null ? "→" : value > 1 ? "↑" : value < -1 ? "↓" : "→"; }
+function fuelPredicate(code) { return row => String(row.fueltype || row["fuel-type"] || row.fuel_type || "").toUpperCase() === code; }
+function normalizeFuelRows(rows) {
+  return rows.map(r => ({ ...r, fueltype: String(r.fueltype || r["fuel-type"] || r.fuel_type || "").toUpperCase(), value: Number(r.value), period: String(r.period || "") })).filter(r => Number.isFinite(r.value) && Number.isFinite(parseAt(r.period)));
 }
 function sameHourAverage(rows, anchorMs, predicate, days) {
   const anchorKey = sameHourKey(new Date(anchorMs).toISOString());
@@ -84,14 +60,6 @@ function sameHourAverage(rows, anchorMs, predicate, days) {
   }
   return average(values);
 }
-function normalizeFuelRows(rows) {
-  return rows.map(r => ({
-    ...r,
-    fueltype: String(r.fueltype || r["fuel-type"] || r.fuel_type || "").toUpperCase(),
-    value: Number(r.value),
-    period: String(r.period || "")
-  })).filter(r => Number.isFinite(r.value) && Number.isFinite(parseAt(r.period)));
-}
 function fuelAt(rows, targetMs) {
   const out = {};
   for (const code of FUEL_CODES) {
@@ -100,12 +68,6 @@ function fuelAt(rows, targetMs) {
   }
   return { gas: out.NG, wind: out.WND, solar: out.SUN };
 }
-function sumGenerationAt(rows, targetMs) {
-  const key = sameHourKey(new Date(targetMs).toISOString());
-  const relevant = rows.filter(r => sameHourKey(r.period) === key);
-  const total = relevant.reduce((sum, r) => sum + (Number.isFinite(r.value) ? r.value : 0), 0);
-  return relevant.length ? total : null;
-}
 function priorYearDate(anchorAt) {
   const ms = parseAt(anchorAt);
   if (!Number.isFinite(ms)) return null;
@@ -113,52 +75,40 @@ function priorYearDate(anchorAt) {
   const get = type => parts.find(x => x.type === type)?.value;
   return `${Number(get("year")) - 1}-${get("month")}-${get("day")}`;
 }
-
 async function queryFuel(state, common, fueltype) {
-  const payload = await fetchEIA("/electricity/rto/fuel-type-data/data/", {
-    ...common,
-    "facets[respondent][]": "US48",
-    "facets[fueltype][]": fueltype
-  }, state);
+  const payload = await fetchEIA("/electricity/rto/fuel-type-data/data/", { ...common, "facets[respondent][]": "US48", "facets[fueltype][]": fueltype }, state);
   return normalizeFuelRows(dataRows(payload));
+}
+function sumAtHour(rows, targetMs) {
+  const key = sameHourKey(new Date(targetMs).toISOString());
+  const values = rows.filter(r => sameHourKey(r.period) === key).map(r => Number(r.value)).filter(Number.isFinite);
+  return values.length ? values.reduce((a, b) => a + b, 0) : null;
 }
 
 async function getPriorYear(state, anchorAt) {
   const date = priorYearDate(anchorAt);
   if (!date) return {};
-  const anchorMs = parseAt(anchorAt);
-  const targetMs = anchorMs - 365 * 86400000;
+  const anchorMs = parseAt(anchorAt), targetMs = anchorMs - 365 * 86400000;
   const targetKey = sameHourKey(new Date(targetMs).toISOString());
-  const common = {
-    frequency: "hourly", "data[]": "value", start: `${date}T00`, end: `${date}T23`,
-    "sort[0][column]": "period", "sort[0][direction]": "asc", length: 5000
-  };
+  const common = { frequency: "hourly", "data[]": "value", start: `${date}T00`, end: `${date}T23`, "sort[0][column]": "period", "sort[0][direction]": "asc", length: 5000 };
   const loadPromise = fetchEIA("/electricity/rto/region-data/data/", { ...common, "facets[respondent][]": "US48", "facets[type][]": ["D"] }, state);
+  const allFuelPromise = fetchEIA("/electricity/rto/fuel-type-data/data/", { ...common, "facets[respondent][]": "US48" }, state);
   const fuelPromises = FUEL_CODES.map(code => queryFuel(state, common, code));
-  const [loadPayload, ...fuelSets] = await Promise.all([loadPromise, ...fuelPromises]);
-  const loadRows = dataRows(loadPayload);
+  const [loadPayload, allFuelPayload, ...fuelSets] = await Promise.all([loadPromise, allFuelPromise, ...fuelPromises]);
+  const loadRows = dataRows(loadPayload), allFuelRows = normalizeFuelRows(dataRows(allFuelPayload));
   const load = loadRows.find(r => String(r.type) === "D" && sameHourKey(r.period) === targetKey);
   const gas = fuelSets[0].find(r => sameHourKey(r.period) === targetKey)?.value ?? null;
   const wind = fuelSets[1].find(r => sameHourKey(r.period) === targetKey)?.value ?? null;
   const solar = fuelSets[2].find(r => sameHourKey(r.period) === targetKey)?.value ?? null;
-  const total = fuelSets.reduce((all, rows) => all.concat(rows.filter(r => sameHourKey(r.period) === targetKey)), []).reduce((s, r) => s + Number(r.value || 0), 0);
-  return {
-    load: load ? Number(load.value) : null,
-    gas, wind, solar,
-    total: total > 0 ? total : null
-  };
+  return { load: load ? Number(load.value) : null, gas, wind, solar, total: sumAtHour(allFuelRows, targetMs) };
 }
 
 function weatherFacts(state) {
   const weather = state.weather || {};
   const actual = Array.isArray(weather.actual) ? weather.actual.filter(x => Number.isFinite(Number(x.hdd)) && Number.isFinite(Number(x.cdd))) : [];
   const forecast = Array.isArray(weather.forecast) ? weather.forecast.filter(x => Number.isFinite(Number(x.hdd)) && Number.isFinite(Number(x.cdd))) : [];
-  const a = actual.at(-1), p = actual.at(-2);
-  const dd = x => x ? Number(x.hdd || 0) + Number(x.cdd || 0) : null;
-  const sumDays = n => {
-    const slice = forecast.slice(0, n);
-    return { hdd: slice.length ? slice.reduce((s, x) => s + Number(x.hdd || 0), 0) : null, cdd: slice.length ? slice.reduce((s, x) => s + Number(x.cdd || 0), 0) : null, tdd: slice.length ? slice.reduce((s, x) => s + dd(x), 0) : null };
-  };
+  const a = actual.at(-1), p = actual.at(-2), dd = x => x ? Number(x.hdd || 0) + Number(x.cdd || 0) : null;
+  const sumDays = n => { const slice = forecast.slice(0, n); return { hdd: slice.length ? slice.reduce((s, x) => s + Number(x.hdd || 0), 0) : null, cdd: slice.length ? slice.reduce((s, x) => s + Number(x.cdd || 0), 0) : null, tdd: slice.length ? slice.reduce((s, x) => s + dd(x), 0) : null }; };
   return {
     actualDate: a?.date || null,
     current: a ? { hdd: Number(a.hdd), cdd: Number(a.cdd), tdd: dd(a) } : null,
@@ -183,75 +133,47 @@ function classify(loadPct, gasPct, residualPct, renewableDeltaPP, completeness) 
 
 async function buildFacts() {
   const state = (await store().get("state", { type: "json" })) || { weather: {}, usage: {} };
-  const now = new Date();
-  const start = new Date(now.getTime() - 8 * 86400000);
-  const common = {
-    frequency: "hourly", "data[]": "value", start: start.toISOString().slice(0, 13), end: now.toISOString().slice(0, 13),
-    "sort[0][column]": "period", "sort[0][direction]": "asc", length: 5000
-  };
-
+  const now = new Date(), start = new Date(now.getTime() - 8 * 86400000);
+  const common = { frequency: "hourly", "data[]": "value", start: start.toISOString().slice(0, 13), end: now.toISOString().slice(0, 13), "sort[0][column]": "period", "sort[0][direction]": "asc", length: 5000 };
   const loadPromise = fetchEIA("/electricity/rto/region-data/data/", { ...common, "facets[respondent][]": "US48", "facets[type][]": ["D", "DF"] }, state);
+  const allFuelPromise = fetchEIA("/electricity/rto/fuel-type-data/data/", { ...common, "facets[respondent][]": "US48" }, state);
   const fuelPromises = FUEL_CODES.map(code => queryFuel(state, common, code));
-  const [loadPayload, ...fuelSets] = await Promise.all([loadPromise, ...fuelPromises]);
-  const loadRows = dataRows(loadPayload);
-  const fuelRows = normalizeFuelRows(fuelSets.flat());
+  const [loadPayload, allFuelPayload, ...fuelSets] = await Promise.all([loadPromise, allFuelPromise, ...fuelPromises]);
+  const loadRows = dataRows(loadPayload), allFuelRows = normalizeFuelRows(dataRows(allFuelPayload)), fuelRows = normalizeFuelRows(fuelSets.flat());
   const loadRow = latest(loadRows, r => String(r.type) === "D");
   if (!loadRow) throw new Error("No current EIA load observation");
 
-  const anchorAt = loadRow.at;
-  const anchorMs = parseAt(anchorAt);
-  const mix = fuelAt(fuelRows, anchorMs);
-  const totalGeneration = sumGenerationAt(fuelRows, anchorMs);
+  const anchorAt = loadRow.at, anchorMs = parseAt(anchorAt), mix = fuelAt(fuelRows, anchorMs);
+  const totalGeneration = sumAtHour(allFuelRows, anchorMs);
   const priorLoad = nearest(loadRows, anchorMs - 86400000, r => String(r.type) === "D");
   const gas24 = nearest(fuelRows, anchorMs - 86400000, fuelPredicate("NG"));
   const wind24 = nearest(fuelRows, anchorMs - 86400000, fuelPredicate("WND"));
   const solar24 = nearest(fuelRows, anchorMs - 86400000, fuelPredicate("SUN"));
   const residual = mix.wind != null && mix.solar != null ? loadRow.value - mix.wind - mix.solar : null;
   const residual24 = priorLoad && wind24 && solar24 ? Number(priorLoad.value) - Number(wind24.value) - Number(solar24.value) : null;
-  const load3 = sameHourAverage(loadRows, anchorMs, r => String(r.type) === "D", 3);
-  const load7 = sameHourAverage(loadRows, anchorMs, r => String(r.type) === "D", 7);
-  const gas3 = sameHourAverage(fuelRows, anchorMs, fuelPredicate("NG"), 3);
-  const gas7 = sameHourAverage(fuelRows, anchorMs, fuelPredicate("NG"), 7);
-  const wind3 = sameHourAverage(fuelRows, anchorMs, fuelPredicate("WND"), 3);
-  const wind7 = sameHourAverage(fuelRows, anchorMs, fuelPredicate("WND"), 7);
-  const solar3 = sameHourAverage(fuelRows, anchorMs, fuelPredicate("SUN"), 3);
-  const solar7 = sameHourAverage(fuelRows, anchorMs, fuelPredicate("SUN"), 7);
+  const load3 = sameHourAverage(loadRows, anchorMs, r => String(r.type) === "D", 3), load7 = sameHourAverage(loadRows, anchorMs, r => String(r.type) === "D", 7);
+  const gas3 = sameHourAverage(fuelRows, anchorMs, fuelPredicate("NG"), 3), gas7 = sameHourAverage(fuelRows, anchorMs, fuelPredicate("NG"), 7);
+  const wind3 = sameHourAverage(fuelRows, anchorMs, fuelPredicate("WND"), 3), wind7 = sameHourAverage(fuelRows, anchorMs, fuelPredicate("WND"), 7);
+  const solar3 = sameHourAverage(fuelRows, anchorMs, fuelPredicate("SUN"), 3), solar7 = sameHourAverage(fuelRows, anchorMs, fuelPredicate("SUN"), 7);
   const residual3 = load3 != null && wind3 != null && solar3 != null ? load3 - wind3 - solar3 : null;
   const residual7 = load7 != null && wind7 != null && solar7 != null ? load7 - wind7 - solar7 : null;
-
   const forecastRows = loadRows.filter(r => String(r.type) === "DF" && Number.isFinite(Number(r.value)) && parseAt(r.period) > anchorMs).sort((a, b) => parseAt(a.period) - parseAt(b.period));
-  const loadForecast = {
-    next1h: forecastRows[0] ? Number(forecastRows[0].value) : null,
-    next3hAvg: average(forecastRows.slice(0, 3).map(r => Number(r.value))),
-    next7hAvg: average(forecastRows.slice(0, 7).map(r => Number(r.value))),
-    surprisePct: forecastRows[0] ? percent(loadRow.value, Number(forecastRows[0].value)) : null
-  };
+  const loadForecast = { next1h: forecastRows[0] ? Number(forecastRows[0].value) : null, next3hAvg: average(forecastRows.slice(0, 3).map(r => Number(r.value))), next7hAvg: average(forecastRows.slice(0, 7).map(r => Number(r.value))), surprisePct: forecastRows[0] ? percent(loadRow.value, Number(forecastRows[0].value)) : null };
 
   const gasShare = mix.gas != null && totalGeneration > 0 ? mix.gas / totalGeneration * 100 : null;
   const renewableShare = mix.wind != null && mix.solar != null && totalGeneration > 0 ? (mix.wind + mix.solar) / totalGeneration * 100 : null;
-  const priorTotal24 = wind24 && solar24 ? Number(wind24.value) + Number(solar24.value) : null;
-  const priorRenewableShare = priorTotal24 != null && totalGeneration > 0 ? priorTotal24 / totalGeneration * 100 : null;
+  const priorTotal = sumAtHour(allFuelRows, anchorMs - 86400000);
+  const priorRenewableShare = priorTotal > 0 && wind24 && solar24 ? (Number(wind24.value) + Number(solar24.value)) / priorTotal * 100 : null;
   const renewableDeltaPP = percentagePoint(renewableShare, priorRenewableShare);
   const priorYear = await getPriorYear(state, anchorAt);
   const priorYearResidual = priorYear.load != null && priorYear.wind != null && priorYear.solar != null ? priorYear.load - priorYear.wind - priorYear.solar : null;
-  const yoy = {
-    load: percent(loadRow.value, priorYear.load), gas: percent(mix.gas, priorYear.gas), wind: percent(mix.wind, priorYear.wind), solar: percent(mix.solar, priorYear.solar), residual: percent(residual, priorYearResidual)
-  };
-
-  const values = [loadRow.value, mix.gas, mix.wind, mix.solar, residual];
-  const completeness = values.filter(Number.isFinite).length / values.length;
+  const yoy = { load: percent(loadRow.value, priorYear.load), gas: percent(mix.gas, priorYear.gas), wind: percent(mix.wind, priorYear.wind), solar: percent(mix.solar, priorYear.solar), residual: percent(residual, priorYearResidual) };
+  const values = [loadRow.value, mix.gas, mix.wind, mix.solar, residual], completeness = values.filter(Number.isFinite).length / values.length;
   const fundamental = classify(percent(loadRow.value, priorLoad?.value), percent(mix.gas, gas24?.value), percent(residual, residual24), renewableDeltaPP, completeness);
   return {
-    anchorAt, anchorET: formatTime(anchorAt, ET), anchorIST: formatTime(anchorAt, "Asia/Kolkata"),
-    fundamental, completeness,
+    anchorAt, anchorET: formatTime(anchorAt, ET), anchorIST: formatTime(anchorAt, "Asia/Kolkata"), fundamental, completeness,
     current: { load: loadRow.value, gas: mix.gas, wind: mix.wind, solar: mix.solar, totalGeneration, residual, gasShare, renewableShare },
-    change: {
-      load24: percent(loadRow.value, priorLoad?.value), load3: percent(loadRow.value, load3), load7: percent(loadRow.value, load7),
-      gas24: percent(mix.gas, gas24?.value), gas3: percent(mix.gas, gas3), gas7: percent(mix.gas, gas7),
-      wind24: percent(mix.wind, wind24?.value), wind3: percent(mix.wind, wind3), wind7: percent(mix.wind, wind7),
-      solar24: percent(mix.solar, solar24?.value), solar3: percent(mix.solar, solar3), solar7: percent(mix.solar, solar7),
-      residual24: percent(residual, residual24), residual3: percent(residual, residual3), residual7: percent(residual, residual7), renewableDeltaPP
-    },
+    change: { load24: percent(loadRow.value, priorLoad?.value), load3: percent(loadRow.value, load3), load7: percent(loadRow.value, load7), gas24: percent(mix.gas, gas24?.value), gas3: percent(mix.gas, gas3), gas7: percent(mix.gas, gas7), wind24: percent(mix.wind, wind24?.value), wind3: percent(mix.wind, wind3), wind7: percent(mix.wind, wind7), solar24: percent(mix.solar, solar24?.value), solar3: percent(mix.solar, solar3), solar7: percent(mix.solar, solar7), residual24: percent(residual, residual24), residual3: percent(residual, residual3), residual7: percent(residual, residual7), renewableDeltaPP },
     yoy, forecast: loadForecast, weather: weatherFacts(state), source: "EIA US48 electricity data + NOAA/CPC weather data"
   };
 }
@@ -266,60 +188,28 @@ async function callNemotron(facts, apiKey) {
     "No buy/sell advice and no natural-gas price forecast.",
     "Write compact Telegram text. Structure: one headline, 5 bullets, then lines beginning Power-sector gas demand:, Key risk:, Data quality:."
   ].join(" ");
-  const response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-    method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ model: MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: JSON.stringify(facts) }], temperature: 0.2, top_p: 0.9, reasoning_effort: "low", max_tokens: 1600, stream: false })
-  });
+  const response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify({ model: MODEL, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: JSON.stringify(facts) }], temperature: 0.2, top_p: 0.9, reasoning_effort: "low", max_tokens: 1600, stream: false }) });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`NVIDIA ${response.status}: ${JSON.stringify(data).slice(0, 800)}`);
   return data?.choices?.[0]?.message?.content?.trim() || "No model response.";
 }
-
 function deterministicAppendix(f) {
   const c = f.current, ch = f.change, y = f.yoy, w = f.weather;
-  return [
-    "", "━━━━━━━━━━━━━━━━━━━━", "📊 DESK FACTS",
-    `Latest EIA   ${f.anchorET} | ${f.anchorIST}`,
-    `Load         ${fmtMWh(c.load)}  ${arrow(ch.load24)} ${signed(ch.load24)}  YoY ${signed(y.load)}`,
-    `Gas burn     ${fmtMWh(c.gas)}  ${arrow(ch.gas24)} ${signed(ch.gas24)}  YoY ${signed(y.gas)}`,
-    `Residual     ${fmtMWh(c.residual)}  ${arrow(ch.residual24)} ${signed(ch.residual24)}  YoY ${signed(y.residual)}`,
-    `Wind         ${fmtMWh(c.wind)}  ${arrow(ch.wind24)} ${signed(ch.wind24)}  YoY ${signed(y.wind)}`,
-    `Solar        ${fmtMWh(c.solar)}  ${arrow(ch.solar24)} ${signed(ch.solar24)}  YoY ${signed(y.solar)}`,
-    `Gas share    ${fmtNum(c.gasShare)}% | Renewables ${fmtNum(c.renewableShare)}% | Δrenew ${signedPP(ch.renewableDeltaPP)}`,
-    `Load forecast 1h ${fmtMWh(f.forecast.next1h)} | surprise ${signed(f.forecast.surprisePct)}`,
-    `Fundamental  ${f.fundamental.state} / ${f.fundamental.confidence}`,
-    `Weather      HDD ${fmtNum(w.current?.hdd)} CDD ${fmtNum(w.current?.cdd)} | 3D TDD ${fmtNum(w.avg3?.tdd)} | 7D TDD ${fmtNum(w.avg7?.tdd)}`,
-    `Next weather TDD 1D ${fmtNum(w.forecast.d1?.tdd)} | 3D ${fmtNum(w.forecast.d3?.tdd)} | 7D ${fmtNum(w.forecast.d7?.tdd)}`,
-    `Data quality ${Math.round(f.completeness * 100)}% core fields present`,
-    `Source       ${f.source}`
-  ].join("\n");
+  return ["", "━━━━━━━━━━━━━━━━━━━━", "📊 DESK FACTS", `Latest EIA ${f.anchorET} | ${f.anchorIST}`, `Load ${fmtMWh(c.load)}  ${arrow(ch.load24)} ${signed(ch.load24)}  YoY ${signed(y.load)}`, `Gas burn ${fmtMWh(c.gas)}  ${arrow(ch.gas24)} ${signed(ch.gas24)}  YoY ${signed(y.gas)}`, `Residual ${fmtMWh(c.residual)}  ${arrow(ch.residual24)} ${signed(ch.residual24)}  YoY ${signed(y.residual)}`, `Wind ${fmtMWh(c.wind)}  ${arrow(ch.wind24)} ${signed(ch.wind24)}  YoY ${signed(y.wind)}`, `Solar ${fmtMWh(c.solar)}  ${arrow(ch.solar24)} ${signed(ch.solar24)}  YoY ${signed(y.solar)}`, `Gas share ${fmtNum(c.gasShare)}% | Renewables ${fmtNum(c.renewableShare)}% | Δrenew ${signedPP(ch.renewableDeltaPP)}`, `Load forecast 1h ${fmtMWh(f.forecast.next1h)} | surprise ${signed(f.forecast.surprisePct)}`, `Fundamental ${f.fundamental.state} / ${f.fundamental.confidence}`, `Weather HDD ${fmtNum(w.current?.hdd)} CDD ${fmtNum(w.current?.cdd)} | 3D TDD ${fmtNum(w.avg3?.tdd)} | 7D TDD ${fmtNum(w.avg7?.tdd)}`, `Next weather TDD 1D ${fmtNum(w.forecast.d1?.tdd)} | 3D ${fmtNum(w.forecast.d3?.tdd)} | 7D ${fmtNum(w.forecast.d7?.tdd)}`, `Data quality ${Math.round(f.completeness * 100)}% core fields present`, `Source ${f.source}`].join("\n");
 }
-
 async function sendTelegram(text, token, chatId) {
   const limit = 3900;
-  const chunks = [];
-  for (let i = 0; i < text.length; i += limit) chunks.push(text.slice(i, i + limit));
-  for (const chunk of chunks) {
-    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text: chunk, disable_web_page_preview: true })
-    });
+  for (let i = 0; i < text.length; i += limit) {
+    const chunk = text.slice(i, i + limit);
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chat_id: chatId, text: chunk, disable_web_page_preview: true }) });
     if (!response.ok) throw new Error(`Telegram ${response.status}`);
   }
 }
-
 export default async () => {
-  const eiaKey = Netlify.env.get("EIA_API_KEY");
-  const nvidiaKey = Netlify.env.get("NVIDIA_API_KEY");
-  const telegramToken = Netlify.env.get("TELEGRAM_BOT_TOKEN");
-  const telegramGroup = Netlify.env.get("TELEGRAM_GROUP_ID");
+  const eiaKey = Netlify.env.get("EIA_API_KEY"), nvidiaKey = Netlify.env.get("NVIDIA_API_KEY"), telegramToken = Netlify.env.get("TELEGRAM_BOT_TOKEN"), telegramGroup = Netlify.env.get("TELEGRAM_GROUP_ID");
   if (!eiaKey || !nvidiaKey || !telegramToken || !telegramGroup) throw new Error("Missing required environment variable");
-
-  const facts = await buildFacts();
-  const analysis = await callNemotron(facts, nvidiaKey);
-  const text = ["🇺🇸 U.S. POWER + NATURAL GAS — DAILY DESK NOTE", "", analysis, deterministicAppendix(facts)].join("\n");
-  await sendTelegram(text, telegramToken, telegramGroup);
+  const facts = await buildFacts(), analysis = await callNemotron(facts, nvidiaKey);
+  await sendTelegram(["🇺🇸 U.S. POWER + NATURAL GAS — DAILY DESK NOTE", "", analysis, deterministicAppendix(facts)].join("\n"), telegramToken, telegramGroup);
   return new Response(JSON.stringify({ ok: true, model: MODEL, anchor_time: facts.anchorAt, fundamental: facts.fundamental, sent: true }, null, 2), { headers: { "content-type": "application/json" } });
 };
-
 export const config = { schedule: "0 11 * * *" };
