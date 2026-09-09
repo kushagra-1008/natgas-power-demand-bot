@@ -3,3 +3,6 @@
 
 [functions]
   directory = "netlify/functions"
+
+[functions."power-demand"]
+  schedule = "@hourly"
