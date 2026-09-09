@@ -70,10 +70,14 @@ function addFuelMix(s, rows) {
 }
 function rowsFor(s, signal) { return s.observations.filter(o => o.signal === signal && Number.isFinite(parseAt(o.at))); }
 function latest(s, signal) { return rowsFor(s, signal).sort((a, b) => parseAt(b.at) - parseAt(a.at))[0] || null; }
+function exactAt(s, signal, at) { return rowsFor(s, signal).find(r => r.at === at) || null; }
 function nearestAt(s, signal, targetMs, toleranceMs = 90 * 60 * 1000) {
   if (!Number.isFinite(targetMs)) return null;
   let best = null, bestDist = Infinity;
-  for (const row of rowsFor(s, signal)) { const dist = Math.abs(parseAt(row.at) - targetMs); if (dist <= toleranceMs && dist < bestDist) { best = row; bestDist = dist; } }
+  for (const row of rowsFor(s, signal)) {
+    const dist = Math.abs(parseAt(row.at) - targetMs);
+    if (dist <= toleranceMs && dist < bestDist) { best = row; bestDist = dist; }
+  }
   return best;
 }
 function sameHourAverage(s, signal, anchorAt, days) {
@@ -95,18 +99,31 @@ function comparison(s, signal, anchorAt, value) {
 }
 function latestCommon(s, signals) {
   for (const candidate of rowsFor(s, signals[0]).sort((a, b) => parseAt(b.at) - parseAt(a.at))) {
-    const ms = parseAt(candidate.at);
-    if (signals.every(signal => nearestAt(s, signal, ms))) return candidate.at;
+    if (signals.every(signal => exactAt(s, signal, candidate.at))) return candidate.at;
   }
   return null;
 }
-function valueAt(s, signal, at) { const row = nearestAt(s, signal, parseAt(at)); return row?.value ?? null; }
+function valueAt(s, signal, at) { return exactAt(s, signal, at)?.value ?? null; }
 function arrow(p) { return p == null ? "•" : p > 1 ? "↑" : p < -1 ? "↓" : "→"; }
 function signedPct(p) { return p == null ? "N/A" : `${p >= 0 ? "+" : ""}${p.toFixed(1)}%`; }
 function fmtMWh(v) { return v == null ? "N/A" : `${Math.round(v).toLocaleString("en-US")} MWh`; }
 function directionIcon(p, positiveIsSupportive = true) { if (p == null) return "⚪"; const x = positiveIsSupportive ? p : -p; return x > 1 ? "🟢" : x < -1 ? "🔴" : "🟡"; }
+function ageHours(at, anchorAt) {
+  const a = parseAt(at), b = parseAt(anchorAt);
+  return Number.isFinite(a) && Number.isFinite(b) ? Math.max(0, (b - a) / 3600000) : null;
+}
+function ageLabel(at, anchorAt) {
+  const h = ageHours(at, anchorAt);
+  if (h == null) return "N/A";
+  if (h < 1) return "<1h";
+  return `${h.toFixed(h < 10 ? 1 : 0)}h`;
+}
+function sourceLabel(row, anchorAt) {
+  if (!row) return "N/A";
+  const age = ageLabel(row.at, anchorAt);
+  return `${formatET(row.at)} (${age} old)`;
+}
 
-// Fetch prior-year values directly from EIA. Nothing returned here is written to Blobs or Neon.
 async function lastYearValues(anchorAt, signals, stateObj) {
   const anchor = etParts(anchorAt);
   if (!anchor) return {};
@@ -143,16 +160,6 @@ async function yearOverYear(anchorAt, current, stateObj) {
   const last = await lastYearValues(anchorAt, metrics, stateObj);
   const out = {};
   for (const metric of metrics) out[metric] = last[metric] != null && current[metric] != null ? { value: last[metric], pct: pct(current[metric], last[metric]) } : null;
-  if (last.total_load != null && last.wind_generation != null && last.solar_generation != null && current.total_load != null && current.wind_generation != null && current.solar_generation != null) {
-    const currentResidual = current.total_load - current.wind_generation - current.solar_generation;
-    const lastResidual = last.total_load - last.wind_generation - last.solar_generation;
-    out.residual_load = { value: lastResidual, pct: pct(currentResidual, lastResidual) };
-  } else out.residual_load = null;
-  if (last.total_generation > 0 && current.total_generation > 0 && last.wind_generation != null && last.solar_generation != null && current.wind_generation != null && current.solar_generation != null) {
-    const currentShare = (current.wind_generation + current.solar_generation) / current.total_generation * 100;
-    const lastShare = (last.wind_generation + last.solar_generation) / last.total_generation * 100;
-    out.renewable_share = { value: lastShare, pct: currentShare - lastShare };
-  } else out.renewable_share = null;
   return out;
 }
 function yoyLine(yoy) { return yoy == null ? "vs LY              N/A" : `vs LY              ${arrow(yoy.pct)} ${signedPct(yoy.pct)}`; }
@@ -160,29 +167,51 @@ function yoyLine(yoy) { return yoy == null ? "vs LY              N/A" : `vs LY  
 async function report(s) {
   const latestRows = Object.fromEntries(ALL_SIGNALS.map(signal => [signal, latest(s, signal)]));
   const rows = Object.fromEntries(CORE_SIGNALS.map(signal => [signal, latestRows[signal] ? comparison(s, signal, latestRows[signal].at, latestRows[signal].value) : null]));
-  const loadRow = latestRows.total_load, gasRow = latestRows.gas_generation, windRow = latestRows.wind_generation, solarRow = latestRows.solar_generation, totalGenRow = latestRows.total_generation;
+  const loadRow = latestRows.total_load;
+  const gasRow = latestRows.gas_generation;
+  const windRow = latestRows.wind_generation;
+  const solarRow = latestRows.solar_generation;
+  const totalGenRow = latestRows.total_generation;
   const load = loadRow?.value ?? null, gas = gasRow?.value ?? null, wind = windRow?.value ?? null, solar = solarRow?.value ?? null, totalGen = totalGenRow?.value ?? null;
   const current = { total_load: load, gas_generation: gas, wind_generation: wind, solar_generation: solar, total_generation: totalGen };
   const yoyAnchor = loadRow?.at || gasRow?.at || windRow?.at || solarRow?.at || null;
   const yoy = yoyAnchor ? await yearOverYear(yoyAnchor, current, s) : {};
 
-  const residualAnchor = latestCommon(s, ["total_load", "wind_generation", "solar_generation"]), residual = residualAnchor ? (() => { const l = valueAt(s, "total_load", residualAnchor), w = valueAt(s, "wind_generation", residualAnchor), so = valueAt(s, "solar_generation", residualAnchor); return l != null && w != null && so != null ? l - w - so : null; })() : null;
-  const residualMs = parseAt(residualAnchor), r24 = residualAnchor ? (() => { const l = nearestAt(s, "total_load", residualMs - 24 * 3600000), w = nearestAt(s, "wind_generation", residualMs - 24 * 3600000), so = nearestAt(s, "solar_generation", residualMs - 24 * 3600000); return l && w && so ? l.value - w.value - so.value : null; })() : null;
-  const r3 = residualAnchor ? (() => { const l = sameHourAverage(s, "total_load", residualAnchor, 3), w = sameHourAverage(s, "wind_generation", residualAnchor, 3), so = sameHourAverage(s, "solar_generation", residualAnchor, 3); return l != null && w != null && so != null ? l - w - so : null; })() : null;
-  const r7 = residualAnchor ? (() => { const l = sameHourAverage(s, "total_load", residualAnchor, 7), w = sameHourAverage(s, "wind_generation", residualAnchor, 7), so = sameHourAverage(s, "solar_generation", residualAnchor, 7); return l != null && w != null && so != null ? l - w - so : null; })() : null;
+  const residualAnchor = latestCommon(s, ["total_load", "wind_generation", "solar_generation"]);
+  const residual = residualAnchor ? (() => {
+    const l = valueAt(s, "total_load", residualAnchor), w = valueAt(s, "wind_generation", residualAnchor), so = valueAt(s, "solar_generation", residualAnchor);
+    return l != null && w != null && so != null ? l - w - so : null;
+  })() : null;
+  const residualMs = parseAt(residualAnchor);
+  const r24 = residualAnchor ? (() => {
+    const target = new Date(residualMs - 24 * 3600000).toISOString().slice(0, 13);
+    const l = exactAt(s, "total_load", target), w = exactAt(s, "wind_generation", target), so = exactAt(s, "solar_generation", target);
+    return l && w && so ? l.value - w.value - so.value : null;
+  })() : null;
+  const r3 = residualAnchor ? (() => {
+    const l = sameHourAverage(s, "total_load", residualAnchor, 3), w = sameHourAverage(s, "wind_generation", residualAnchor, 3), so = sameHourAverage(s, "solar_generation", residualAnchor, 3);
+    return l != null && w != null && so != null ? l - w - so : null;
+  })() : null;
+  const r7 = residualAnchor ? (() => {
+    const l = sameHourAverage(s, "total_load", residualAnchor, 7), w = sameHourAverage(s, "wind_generation", residualAnchor, 7), so = sameHourAverage(s, "solar_generation", residualAnchor, 7);
+    return l != null && w != null && so != null ? l - w - so : null;
+  })() : null;
   const residualP24 = pct(residual, r24);
   const gasShare = gas != null && totalGen > 0 ? gas / totalGen * 100 : null;
   const renewableShare = wind != null && solar != null && totalGen > 0 ? (wind + solar) / totalGen * 100 : null;
-  const forecastRow = loadRow ? nearestAt(s, "load_forecast", parseAt(loadRow.at)) : null;
-  const forecast = forecastRow?.value ?? null, forecastSurprise = load != null && forecast != null ? pct(load, forecast) : null;
+  const forecastRow = loadRow ? exactAt(s, "load_forecast", loadRow.at) : null;
+  const forecast = forecastRow?.value ?? null;
+  const forecastSurprise = load != null && forecast != null ? pct(load, forecast) : null;
   const p = [rows.gas_generation?.p24, rows.total_load?.p24, rows.wind_generation?.p24 != null ? -rows.wind_generation.p24 : null, rows.solar_generation?.p24 != null ? -rows.solar_generation.p24 : null].filter(v => v != null);
   const score = p.length >= 2 ? p.reduce((a, b) => a + b, 0) / p.length : null;
   const overall = score == null ? "⚪ INSUFFICIENT DATA" : score >= 2 ? "🟢 ELEVATED" : score <= -2 ? "🔴 REDUCED" : "🟡 MIXED";
   const divergence = rows.gas_generation?.p24 != null && residualP24 != null && ((rows.gas_generation.p24 > 1 && residualP24 < -1) || (rows.gas_generation.p24 < -1 && residualP24 > 1));
 
-  const latestDataMs = Math.max(...ALL_SIGNALS.map(signal => parseAt(latestRows[signal]?.at)).filter(Number.isFinite));
-  const latestDataAt = Number.isFinite(latestDataMs) ? new Date(latestDataMs).toISOString() : null;
-  const freshness = signal => { const ms = parseAt(latestRows[signal]?.at); if (!Number.isFinite(ms) || !Number.isFinite(latestDataMs)) return "N/A"; const hours = Math.max(0, (latestDataMs - ms) / 3600000); return hours < 1 ? "<1h" : `${hours.toFixed(hours < 10 ? 1 : 0)}h`; };
+  const anchorAt = loadRow?.at || null;
+  const latestDataAt = anchorAt;
+  const freshness = signal => latestRows[signal]?.at ? ageLabel(latestRows[signal].at, anchorAt) : "N/A";
+  const residualAge = residualAnchor ? ageLabel(residualAnchor, anchorAt) : null;
+  const generationAnchorLabel = residualAnchor ? formatET(residualAnchor) : "N/A";
 
   return [
     "🔥 U.S. POWER → NATGAS", "━━━━━━━━━━━━━━━━━━━━", "",
@@ -194,36 +223,40 @@ async function report(s) {
     `vs 3D avg          ${arrow(rows.total_load?.p3)} ${signedPct(rows.total_load?.p3)}`,
     `vs 7D avg          ${arrow(rows.total_load?.p7)} ${signedPct(rows.total_load?.p7)}`,
     yoyLine(yoy.total_load), "",
-    "🔥 GAS BURN",
-    `Now              ${fmtMWh(gas)}`,
+    "🔥 GAS GENERATION",
+    `Latest EIA         ${fmtMWh(gas)}`,
+    `As of              ${sourceLabel(gasRow, anchorAt)}`,
     `vs 24h             ${arrow(rows.gas_generation?.p24)} ${signedPct(rows.gas_generation?.p24)}`,
     `vs 3D avg          ${arrow(rows.gas_generation?.p3)} ${signedPct(rows.gas_generation?.p3)}`,
     `vs 7D avg          ${arrow(rows.gas_generation?.p7)} ${signedPct(rows.gas_generation?.p7)}`,
     yoyLine(yoy.gas_generation),
     `Gas share          ${gasShare == null ? "N/A" : gasShare.toFixed(1) + "%"}`, "",
     "🌬️ WIND",
-    `Now              ${fmtMWh(wind)}`,
+    `Latest EIA         ${fmtMWh(wind)}`,
+    `As of              ${sourceLabel(windRow, anchorAt)}`,
     `vs 24h             ${arrow(rows.wind_generation?.p24)} ${signedPct(rows.wind_generation?.p24)}`,
     `vs 3D avg          ${arrow(rows.wind_generation?.p3)} ${signedPct(rows.wind_generation?.p3)}`,
     `vs 7D avg          ${arrow(rows.wind_generation?.p7)} ${signedPct(rows.wind_generation?.p7)}`,
     yoyLine(yoy.wind_generation), "",
     "☀️ SOLAR",
-    `Now              ${fmtMWh(solar)}`,
+    `Latest EIA         ${fmtMWh(solar)}`,
+    `As of              ${sourceLabel(solarRow, anchorAt)}`,
     `vs 24h             ${arrow(rows.solar_generation?.p24)} ${signedPct(rows.solar_generation?.p24)}`,
     `vs 3D avg          ${arrow(rows.solar_generation?.p3)} ${signedPct(rows.solar_generation?.p3)}`,
     `vs 7D avg          ${arrow(rows.solar_generation?.p7)} ${signedPct(rows.solar_generation?.p7)}`,
     yoyLine(yoy.solar_generation), "",
     "⚡ RESIDUAL LOAD",
     `Load − Wind − Solar ${fmtMWh(residual)}`,
+    `Synchronized as of ${generationAnchorLabel} (${residualAge ?? "N/A"} old)`,
     `vs 24h             ${arrow(residualP24)} ${signedPct(residualP24)}`,
     `vs 3D avg          ${arrow(pct(residual, r3))} ${signedPct(pct(residual, r3))}`,
     `vs 7D avg          ${arrow(pct(residual, r7))} ${signedPct(pct(residual, r7))}`,
-    yoyLine(yoy.residual_load),
     `Renewable share    ${renewableShare == null ? "N/A" : renewableShare.toFixed(1) + "%"}`, "",
     "🔮 LOAD EXPECTATION",
     `Actual             ${fmtMWh(load)}`,
     `Forecast           ${fmtMWh(forecast)}`,
     `Actual vs forecast ${arrow(forecastSurprise)} ${signedPct(forecastSurprise)}`,
+    forecastRow ? `Forecast as of     ${formatET(forecastRow.at)}` : "Forecast as of     N/A",
     "vs LY              N/A (historical forecast vintages not stored)", "",
     "━━━━━━━━━━━━━━━━━━━━", "📊 FUNDAMENTAL STATE",
     `Power demand       ${directionIcon(rows.total_load?.p24, true)}`,
