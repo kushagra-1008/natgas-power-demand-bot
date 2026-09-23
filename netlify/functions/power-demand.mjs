@@ -1,9 +1,36 @@
 import { getStore } from "@netlify/blobs";
 import { fetchEIA, dataRows } from "./eia.mjs";
+import pg from "pg";
+
+const { Pool } = pg;
 
 const CORE_SIGNALS = ["gas_generation", "total_load", "wind_generation", "solar_generation"];
 const ALL_SIGNALS = [...CORE_SIGNALS, "total_generation", "load_forecast"];
 const store = () => getStore("natgas-power-demand");
+
+
+
+// Prevent two concurrent Netlify invocations from sending the same Telegram report.
+async function acquireRunLock() {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) return { pool: null, client: null, acquired: true };
+  const pool = new Pool({ connectionString: databaseUrl, max: 1, idleTimeoutMillis: 5000, connectionTimeoutMillis: 5000 });
+  const client = await pool.connect();
+  const result = await client.query("SELECT pg_try_advisory_lock(741852963) AS acquired");
+  if (!result.rows[0]?.acquired) {
+    client.release();
+    await pool.end();
+    return { pool: null, client: null, acquired: false };
+  }
+  return { pool, client, acquired: true };
+}
+
+async function releaseRunLock(lock) {
+  if (!lock?.client) return;
+  try { await lock.client.query("SELECT pg_advisory_unlock(741852963)"); } catch {}
+  lock.client.release();
+  await lock.pool.end();
+}
 
 async function state() {
   const s = (await store().get("state", { type: "json" })) || { observations: [], usage: {}, lastRun: null, source: "EIA" };
@@ -284,7 +311,13 @@ async function telegram(text) {
 }
 
 export default async () => {
-  if (!process.env.EIA_API_KEY || !process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_GROUP_ID) throw new Error("Missing EIA_API_KEY, TELEGRAM_BOT_TOKEN or TELEGRAM_GROUP_ID");
+  const lock = await acquireRunLock();
+  if (!lock.acquired) {
+    console.log("Skipped duplicate/concurrent power-demand invocation");
+    return new Response(JSON.stringify({ ok: true, skipped: "duplicate_or_concurrent_invocation" }), { headers: { "content-type": "application/json" } });
+  }
+  try {
+    if (!process.env.EIA_API_KEY || !process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_GROUP_ID) throw new Error("Missing EIA_API_KEY, TELEGRAM_BOT_TOKEN or TELEGRAM_GROUP_ID");
   const s = await state(), now = new Date(), d = due(now);
   const start = new Date(now.getTime() - 8 * 24 * 3600000);
   const common = { frequency: "hourly", "data[]": "value", start: start.toISOString().slice(0, 13), end: now.toISOString().slice(0, 13), "sort[0][column]": "period", "sort[0][direction]": "desc", length: 5000 };
@@ -311,5 +344,8 @@ export default async () => {
 
   const text = await report(s);
   await telegram(text);
-  return new Response(JSON.stringify({ ok: true, lastRun: s.lastRun, observations: s.observations.length, yoy: "EIA_API_ONLY" }), { headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ ok: true, lastRun: s.lastRun, observations: s.observations.length, yoy: "EIA_API_ONLY" }), { headers: { "content-type": "application/json" } });
+  } finally {
+    await releaseRunLock(lock);
+  }
 };
