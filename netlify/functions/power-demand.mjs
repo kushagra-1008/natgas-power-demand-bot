@@ -314,5 +314,4 @@ export default async () => {
   const text = await report(s);
   await telegram(text);
     return new Response(JSON.stringify({ ok: true, lastRun: s.lastRun, observations: s.observations.length, yoy: "EIA_API_ONLY" }), { headers: { "content-type": "application/json" } });
-  }
 };
