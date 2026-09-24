@@ -285,8 +285,7 @@ async function telegram(text) {
 }
 
 export default async () => {
-  try {
-    if (!process.env.EIA_API_KEY || !process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_GROUP_ID) throw new Error("Missing EIA_API_KEY, TELEGRAM_BOT_TOKEN or TELEGRAM_GROUP_ID");
+  if (!process.env.EIA_API_KEY || !process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_GROUP_ID) throw new Error("Missing EIA_API_KEY, TELEGRAM_BOT_TOKEN or TELEGRAM_GROUP_ID");
   const s = await state(), now = new Date(), d = due(now);
   const start = new Date(now.getTime() - 8 * 24 * 3600000);
   const common = { frequency: "hourly", "data[]": "value", start: start.toISOString().slice(0, 13), end: now.toISOString().slice(0, 13), "sort[0][column]": "period", "sort[0][direction]": "desc", length: 5000 };
