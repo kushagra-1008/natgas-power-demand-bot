@@ -118,10 +118,37 @@ export async function fetchEIA(path, params = {}, state) {
     if (Array.isArray(v)) for (const item of v) url.searchParams.append(k, item);
     else if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
   }
-  const response = await fetch(url, { headers: { accept: "application/json" } });
+  const response = await fetch(url, {
+    headers: {
+      accept: "application/json",
+      "user-agent": "natgas-power-demand-bot/2.0",
+    },
+  });
   state.usage[month]++;
-  if (!response.ok) throw new Error(`EIA ${response.status}: ${(await response.text()).slice(0, 400)}`);
-  return response.json();
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`EIA ${response.status}: ${body.slice(0, 500)}`);
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    throw new Error(`EIA returned non-JSON: ${body.slice(0, 300)}`);
+  }
+
+  if (payload?.error) {
+    throw new Error(`EIA API error: ${JSON.stringify(payload.error).slice(0, 500)}`);
+  }
+
+  const rows = payload?.response?.data;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error(
+      `EIA returned zero rows for ${path}; total=${payload?.response?.total ?? "unknown"}`
+    );
+  }
+
+  return payload;
 }
 
 export function dataRows(payload) { return payload?.response?.data || []; }
