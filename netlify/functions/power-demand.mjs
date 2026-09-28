@@ -265,20 +265,52 @@ export default async () => {
     length: 5000,
   };
 
-  const [fuelPayload, loadPayload] = await Promise.all([
-    fetchEIA("/electricity/rto/fuel-type-data/data/", {
-      ...common,
-      "facets[respondent][]": "US48",
-    }, s),
-    fetchEIA("/electricity/rto/region-data/data/", {
-      ...common,
-      "facets[respondent][]": "US48",
-      "facets[type][]": ["D", "DF"],
-    }, s),
-  ]);
+  // EIA-930 publication cadence: load hourly, fuel mix every 3h,
+  // forecast every 6h. This stays below the 1,250/month request budget.
+  const hour = Number(new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    hour: "numeric",
+    hour12: false,
+  }).format(now));
 
-  const fuelRows = dataRows(fuelPayload);
-  const loadRows = dataRows(loadPayload);
+  let fuelRows = Array.isArray(s.fuelRows) ? s.fuelRows : [];
+  let loadRows = [];
+  let forecastRows = [];
+
+  const loadPayload = await fetchEIA("/electricity/rto/region-data/data/", {
+    ...common,
+    "facets[respondent][]": "US48",
+    "facets[type][]": "D",
+  }, s);
+  loadRows = dataRows(loadPayload);
+
+  if (hour % 3 === 0 || fuelRows.length === 0) {
+    const fuelPayload = await fetchEIA("/electricity/rto/fuel-type-data/data/", {
+      ...common,
+      "facets[respondent][]": "US48",
+      "facets[fueltype][]": ["NG", "WND", "SUN"],
+    }, s);
+    fuelRows = dataRows(fuelPayload);
+    s.fuelRows = fuelRows;
+  }
+
+  if (hour % 6 === 0 || !(s.observations || []).some((o) => o.signal === "load_forecast")) {
+    const forecastPayload = await fetchEIA("/electricity/rto/region-data/data/", {
+      ...common,
+      "facets[respondent][]": "US48",
+      "facets[type][]": "DF",
+    }, s);
+    forecastRows = dataRows(forecastPayload);
+  }
+
+  console.log(JSON.stringify({
+    eia_counts: { load: loadRows.length, forecast: forecastRows.length, fuel: fuelRows.length },
+    eia_latest: {
+      load: loadRows[0]?.period || null,
+      forecast: forecastRows[0]?.period || null,
+      fuel: fuelRows[0]?.period || null,
+    },
+  }));
 
   for (const row of fuelRows) {
     const type = fuelType(row);
@@ -293,12 +325,20 @@ export default async () => {
 
   for (const row of loadRows) {
     const type = String(row.type || "");
-    const signal = type === "D" ? "total_load" : type === "DF" ? "load_forecast" : null;
+    const signal = type === "D" ? "total_load" : null;
     if (!signal) continue;
     const value = Number(row.value);
     const at = String(row.period || "");
     if (Number.isFinite(value) && at && !s.observations?.some((o) => o.signal === signal && o.at === at)) {
       (s.observations ||= []).push({ signal, value, at, unit: "MWh" });
+    }
+  }
+
+  for (const row of forecastRows) {
+    const value = Number(row.value);
+    const at = String(row.period || "");
+    if (Number.isFinite(value) && at && !s.observations?.some((o) => o.signal === "load_forecast" && o.at === at)) {
+      (s.observations ||= []).push({ signal: "load_forecast", value, at, unit: "MWh" });
     }
   }
 
