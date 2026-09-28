@@ -5,6 +5,5 @@
   "engines": { "node": ">=22" },
   "dependencies": {
     "@netlify/blobs": "^9.0.0",
-    "pg": "^8.16.3"
   }
 }
