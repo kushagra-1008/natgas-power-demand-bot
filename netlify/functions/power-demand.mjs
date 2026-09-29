@@ -52,7 +52,7 @@ function arrow(p) {
 function latest(rows, predicate) {
   return rows
     .filter(predicate)
-    .map((r) => ({ value: Number(r.value), at: String(r.period || "") }))
+    .map((r) => ({ value: numericValue(r), at: periodValue(r) || String(r.at || "") }))
     .filter((r) => Number.isFinite(r.value) && Number.isFinite(parseAt(r.at)))
     .sort((a, b) => parseAt(b.at) - parseAt(a.at))[0] || null;
 }
@@ -62,11 +62,12 @@ function nearest(rows, targetMs, predicate, toleranceMs = 2 * 3600000) {
   let bestDist = Infinity;
   for (const row of rows) {
     if (!predicate(row)) continue;
-    const ms = parseAt(row.period);
+    const at = periodValue(row) || String(row.at || "");
+    const ms = parseAt(at);
     if (!Number.isFinite(ms)) continue;
     const dist = Math.abs(ms - targetMs);
     if (dist <= toleranceMs && dist < bestDist) {
-      best = { value: Number(row.value), at: String(row.period || "") };
+      best = { value: numericValue(row), at };
       bestDist = dist;
     }
   }
@@ -352,8 +353,8 @@ export default async () => {
   }
 
   for (const row of forecastRows) {
-    const value = Number(row.value);
-    const at = String(row.period || "");
+    const value = numericValue(row);
+    const at = periodValue(row);
     if (Number.isFinite(value) && at && !s.observations?.some((o) => o.signal === "load_forecast" && o.at === at)) {
       (s.observations ||= []).push({ signal: "load_forecast", value, at, unit: "MWh" });
     }
