@@ -138,6 +138,14 @@ async function saveState(s) {
 }
 
 async function sendTelegram(message) {
+  const runId = `tg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  console.log(JSON.stringify({
+    telegram_attempt: true,
+    runId,
+    chatConfigured: Boolean(process.env.TELEGRAM_GROUP_ID),
+    messageLength: message.length,
+    firstLine: message.split("\n")[0],
+  }));
   const response = await fetch(
     `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
     {
@@ -150,8 +158,16 @@ async function sendTelegram(message) {
       }),
     }
   );
+  const responseBody = await response.text();
+  console.log(JSON.stringify({
+    telegram_result: true,
+    runId,
+    status: response.status,
+    ok: response.ok,
+    response: responseBody.slice(0, 500),
+  }));
   if (!response.ok) {
-    throw new Error(`Telegram ${response.status}: ${(await response.text()).slice(0, 300)}`);
+    throw new Error(`Telegram ${response.status}: ${responseBody.slice(0, 300)}`);
   }
 }
 
