@@ -396,10 +396,12 @@ export default async () => {
     : null;
   // Version the send key so the first corrected deployment can resend the
   // current EIA period that may previously have been sent as an N/A report.
-  const fetchKey = `v3:${reportHour?.at || now.toISOString()}`;
+  const fetchKey = `v4:${reportHour?.at || now.toISOString()}`;
+  console.log(JSON.stringify({ delivery_stage: "REPORT_BUILT", fetchKey }));
 
   // Netlify can retry a scheduled invocation. The same EIA period must never send twice.
   if (s.lastSentFetchKey === fetchKey) {
+    console.log(JSON.stringify({ delivery_stage: "DUPLICATE_SUPPRESSED", fetchKey }));
     s.lastRun = now.toISOString();
     s.lastDuplicateSuppressed = true;
     await saveState(s);
@@ -412,7 +414,9 @@ export default async () => {
     }), { headers: { "content-type": "application/json" } });
   }
 
+  console.log(JSON.stringify({ delivery_stage: "TELEGRAM_SEND_ATTEMPT", fetchKey, report_preview: report.slice(0, 500) }));
   await sendTelegram(report);
+  console.log(JSON.stringify({ delivery_stage: "TELEGRAM_SEND_SUCCESS", fetchKey }));
 
   s.lastRun = now.toISOString();
   s.lastSentFetchKey = fetchKey;
