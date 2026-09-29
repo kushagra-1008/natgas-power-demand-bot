@@ -393,7 +393,9 @@ export default async () => {
   const reportHour = loadRows.length
     ? latest(loadRows, (r) => String(r.type || "") === "D")
     : null;
-  const fetchKey = reportHour?.at || now.toISOString();
+  // Version the send key so the first corrected deployment can resend the
+  // current EIA period that may previously have been sent as an N/A report.
+  const fetchKey = `v3:${reportHour?.at || now.toISOString()}`;
 
   // Netlify can retry a scheduled invocation. The same EIA period must never send twice.
   if (s.lastSentFetchKey === fetchKey) {
