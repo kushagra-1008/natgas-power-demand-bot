@@ -96,7 +96,24 @@ function sameHourAverage(rows, anchorMs, predicate, days) {
 }
 
 function fuelType(row) {
-  return String(row.fueltype || row["fuel-type"] || row.fuel_type || "").toUpperCase();
+  return String(
+    row.fueltype ??
+    row["fuel-type"] ??
+    row.fuel_type ??
+    row.fueltypeid ??
+    row.fueltype_id ??
+    ""
+  ).trim().toUpperCase();
+}
+
+function numericValue(row) {
+  const raw = row?.value ?? row?.["value"] ?? row?.data?.value;
+  const n = typeof raw === "number" ? raw : Number(String(raw ?? "").replace(/,/g, "").trim());
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function periodValue(row) {
+  return String(row?.period ?? row?.timestamp ?? row?.datetime ?? "").trim();
 }
 
 function addFuelMix(rows) {
@@ -316,8 +333,8 @@ export default async () => {
     const type = fuelType(row);
     if (!["NG", "WND", "SUN"].includes(type)) continue;
     const signal = type === "NG" ? "gas_generation" : type === "WND" ? "wind_generation" : "solar_generation";
-    const value = Number(row.value);
-    const at = String(row.period || "");
+    const value = numericValue(row);
+    const at = periodValue(row);
     if (Number.isFinite(value) && at && !s.observations?.some((o) => o.signal === signal && o.at === at)) {
       (s.observations ||= []).push({ signal, value, at, unit: "MWh" });
     }
@@ -327,8 +344,8 @@ export default async () => {
     const type = String(row.type || "");
     const signal = type === "D" ? "total_load" : null;
     if (!signal) continue;
-    const value = Number(row.value);
-    const at = String(row.period || "");
+    const value = numericValue(row);
+    const at = periodValue(row);
     if (Number.isFinite(value) && at && !s.observations?.some((o) => o.signal === signal && o.at === at)) {
       (s.observations ||= []).push({ signal, value, at, unit: "MWh" });
     }
@@ -342,9 +359,35 @@ export default async () => {
     }
   }
 
-  s._fuelRows = fuelRows.filter((r) => Number.isFinite(Number(r.value)));
+  s._fuelRows = fuelRows.filter((r) => Number.isFinite(numericValue(r))).map((r) => ({
+    ...r,
+    value: numericValue(r),
+    period: periodValue(r),
+  }));
   const cutoff = Date.now() - 10 * 24 * 3600000;
   s.observations = (s.observations || []).filter((o) => parseAt(o.at) >= cutoff);
+
+  const parsedSignals = ["total_load", "gas_generation", "wind_generation", "solar_generation"]
+    .filter((signal) => (s.observations || []).some((o) => o.signal === signal));
+
+  console.log(JSON.stringify({
+    parsed_signals: parsedSignals,
+    observation_count: (s.observations || []).length,
+    latest_observation: (s.observations || []).sort((a, b) => parseAt(b.at) - parseAt(a.at))[0] || null,
+  }));
+
+  if (!parsedSignals.includes("total_load") || !parsedSignals.includes("gas_generation")) {
+    throw new Error(
+      `EIA parsed insufficient signals: ${JSON.stringify({
+        parsedSignals,
+        loadRows: loadRows.length,
+        forecastRows: forecastRows.length,
+        fuelRows: fuelRows.length,
+        sampleLoad: loadRows[0] || null,
+        sampleFuel: fuelRows[0] || null,
+      }).slice(0, 1800)}`
+    );
+  }
 
   const report = buildReport(s);
   const reportHour = loadRows.length
